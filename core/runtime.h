@@ -4,9 +4,10 @@
 #include <string>
 #include <vector>
 
+#include "world.h"
+
 namespace kindle {
 
-class World;
 struct ActionParams;
 struct Agent;
 struct RuntimeNatives;
@@ -44,8 +45,15 @@ public:
     // Runs a character until its local time reaches `tick_end` (idle time if its code is not running).
     void run_until(int char_obj, double tick_end);
 
+    // Player's global variables: every character's code sees them as read-only names (UPPER_CASE,
+    // stored in builtins). A character assigning the same name only creates its own local copy.
+    bool set_global(const std::string& name, const World::GlobalValue& value, std::string& error);
+    bool remove_global(const std::string& name);
+    static bool valid_global_name(const std::string& name);
+
     AgentState state(int char_obj) const;
     int current_line(int char_obj) const;  // line of player code being executed (0 if unknown)
+    std::string source(int char_obj) const;  // code assigned with set_code ("" if none)
     World& world() { return world_; }
 
 private:

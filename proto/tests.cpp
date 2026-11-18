@@ -21,11 +21,29 @@ double at(int day, int h, int m = 0) { return (day - 1) * kDay + h * 3600.0 + m 
 struct Opts {
     int chars = 1;
     int axes = 1;
+    int sickles = 0;
     int bread = 10;
+    int grain = 0;
+    int wood = 0;
     int trees = 200;
+    int start_day = 1;
+    double start_hour = 5.5;
     bool random_rain = false;
     uint64_t seed = 1;
 };
+
+// The start of the game (godot/scripts/main.gd uses the same numbers).
+Opts mvp_opts() {
+    Opts o;
+    o.chars = 4;
+    o.axes = 2;
+    o.sickles = 2;
+    o.bread = 40;
+    o.grain = 30;
+    o.random_rain = true;
+    o.seed = 3;
+    return o;
+}
 
 class Ctx {
 public:
@@ -39,9 +57,13 @@ public:
         StartScene scene;
         scene.characters = o.chars;
         scene.axes = o.axes;
+        scene.sickles = o.sickles;
         scene.bread = o.bread;
+        scene.grain = o.grain;
         scene.trees = o.trees;
+        scene.start_time = (o.start_day - 1) * kDay + o.start_hour * 3600.0;
         build_start_scene(s.world(), scene);
+        s.world().object(s.world().find("Склад_1")->id)->resources["wood"] = o.wood;
         return s;
     }
 
@@ -129,7 +151,7 @@ notify("готово")
     ctx.check(s.runtime().state(hero) == AgentState::Finished, "стан коду — «завершився»");
     Object& st = obj(w, "Склад_1");
     ctx.check(st.resources["wood"] == 3, "на складі 3 дрова");
-    ctx.check(st.axes == 1 && st.axes_reserved == 0, "сокира повернулась на склад");
+    ctx.check(st.tools["axe"] == 1 && st.tools_reserved["axe"] == 0, "сокира повернулась на склад");
     if (fin) {
         ctx.info("кінець: " + w.format_time(fin->time));
         ctx.check(time_in(fin, at(1, 8, 30), at(1, 10)), "тривалість правдоподібна (кінець між 08:30 і 10:00)");
@@ -179,7 +201,7 @@ notify("обмеження працюють")
 )PY");
     s.run_until(at(1, 12));
     ctx.check(find_log(s.world(), "обмеження працюють").has_value(), "amount=, until=, hours= і незавершений прогрес");
-    double partial = s.world().character(hero).chop_partial[s.world().find("Ліс_1")->id];
+    double partial = s.world().character(hero).work_partial[s.world().find("Ліс_1")->id];
     ctx.info("незавершена одиниця дров: " + std::to_string(partial));
     ctx.check(partial > 0.3 && partial < 0.7, "прогрес незавершеної одиниці збережено (~0.5)");
 }
@@ -384,7 +406,7 @@ me.take(Axe, get("Склад_1"))
 me.chop_wood(get("Ліс_1"), amount=10)
 )PY");
         s.run_until(at(1, 6, 30));
-        double partial = w.character(hero).chop_partial[forest];
+        double partial = w.character(hero).work_partial[forest];
         ctx.info("до зміни коду: дров " + std::to_string(w.character(hero).carrying["wood"]) + ", незавершена одиниця " +
                  std::to_string(partial));
         ctx.check(partial > 0.1 && partial < 0.95, "зміна коду посеред одиниці дров");
@@ -415,9 +437,9 @@ notify("B: одиниця готова")
         s.runtime().set_code(hero, "me.take(Axe, get(\"Склад_1\"))\n");
         s.run_for(30, 30);
         Object& st = obj(w, "Склад_1");
-        ctx.check(st.axes_reserved == 1, "під час take() сокира зарезервована");
+        ctx.check(st.tools_reserved["axe"] == 1, "під час take() сокира зарезервована");
         s.runtime().set_code(hero, "pass\n");
-        ctx.check(st.axes_reserved == 0 && st.axes == 1, "після зміни коду резерв знято");
+        ctx.check(st.tools_reserved["axe"] == 0 && st.tools["axe"] == 1, "після зміни коду резерв знято");
     }
 }
 
@@ -636,6 +658,8 @@ void t_load_50(Ctx& ctx) {
     ctx.check(obj(w, "Склад_1").resources["wood"] > 50 * 40, "усі працюють (понад 40 дров на персонажа за 2 дні)");
 }
 
+#include "tests_mvp.inc"
+
 struct TestCase {
     const char* name;
     const char* title;
@@ -661,6 +685,17 @@ const TestCase kTests[] = {
     {"tempo_no_sleep", "темп: втома без сну (§6)", t_tempo_no_sleep},
     {"tempo_workday", "темп: робочий день лісоруба (§6)", t_tempo_workday},
     {"load_50", "навантаження: 50 персонажів (§7.8)", t_load_50},
+    {"seasons", "MVP: пори року й температура", t_seasons},
+    {"cold_and_clothes", "MVP: холод і теплий одяг", t_cold_and_clothes},
+    {"house_heating", "MVP: опалення будинку, сон у теплі й холоді", t_house_heating},
+    {"field_cycle", "MVP: поле → зерно → жорна → борошно → піч → хліб", t_field_cycle},
+    {"mvp_rules", "MVP: недозволені дії викидають винятки", t_mvp_rules},
+    {"mvp_winter_survival", "MVP: хороший код переживає першу зиму", t_mvp_winter_survival},
+    {"mvp_bad_code", "MVP: поганий код — смерті з причинами в журналі", t_mvp_bad_code},
+    {"construction", "MVP: креслення → матеріали → будівництво → заселення", t_construction},
+    {"construction_rules", "MVP: правила будівництва, поле за кресленням", t_construction_rules},
+    {"globals", "MVP: глобальні змінні гравця", t_globals},
+    {"workplace_busy", "MVP: зайняті жорна (WorkplaceBusyError)", t_workplace_busy},
 };
 
 }  // namespace

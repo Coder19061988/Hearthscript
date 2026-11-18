@@ -11,7 +11,7 @@ import inspect as _inspect
 
 _DAY = 86400.0
 _POLL_SECONDS = 60.0
-_RESOURCES = ("wood", "bread")
+_RESOURCES = ("wood", "bread", "grain", "flour")
 
 
 def _is_number(x):
@@ -217,6 +217,18 @@ class _World:
     def is_raining(self):
         return _kn.world_is_raining()
 
+    @property
+    def season(self):
+        return _kn.world_season()
+
+    @property
+    def season_days_left(self):
+        return _kn.world_season_days_left()
+
+    @property
+    def temperature(self):
+        return _kn.world_temperature()
+
     def __repr__(self):
         return f"world(день {self.day}, {self.time})"
 
@@ -230,6 +242,11 @@ class Event:
 
 
 _EVENTS = (Event.RAIN, Event.RAIN_STOPPED)
+
+
+class Season:
+    WARM = "WARM"
+    WINTER = "WINTER"
 
 
 class EventInfo:
@@ -295,6 +312,10 @@ class NotFoundError(ActionError):
     pass
 
 
+class WorkplaceBusyError(ActionError):
+    pass
+
+
 # ------------------------------------------------------------------ tools and objects
 
 class Tool:
@@ -305,7 +326,30 @@ class Axe(Tool):
     _kind = "axe"
 
 
-_TOOLS = {"axe": Axe}
+class Sickle(Tool):
+    _kind = "sickle"
+
+
+_TOOLS = {"axe": Axe, "sickle": Sickle}
+
+
+class Clothes:
+    """Звичайний (робочий) одяг."""
+    _kind = "clothes"
+
+
+class WarmClothes(Clothes):
+    """Теплий одяг для зими."""
+    _kind = "warm_clothes"
+
+
+_CLOTHES = {"clothes": Clothes, "warm_clothes": WarmClothes}
+
+
+def _clothes_kind(item):
+    if isinstance(item, type) and issubclass(item, Clothes):
+        return item._kind
+    raise TypeError(f"очікується одяг: Clothes або WarmClothes, а не {_tname(item)}")
 
 
 def _tool_kind(tool):
@@ -316,7 +360,7 @@ def _tool_kind(tool):
 
 def _check_resource(resource):
     if resource not in _RESOURCES:
-        raise ValueError(f"невідомий ресурс {resource!r}; доступні: \"wood\", \"bread\"")
+        raise ValueError(f"невідомий ресурс {resource!r}; доступні: " + ", ".join(_RESOURCES))
 
 
 class GameObject:
@@ -343,7 +387,25 @@ class GameObject:
         return f"{_tname(self)}(\"{self._name}\")"
 
 
-class Storage(GameObject):
+class Building(GameObject):
+    """Склад, будинок або поле. Поставлене гравцем креслення — будова, доки не збудована."""
+
+    @property
+    def is_built(self):
+        return _kn.building_info(self._id, "built")
+
+    @property
+    def progress(self):
+        """Скільки збудовано, 0..1."""
+        return _kn.building_info(self._id, "progress")
+
+    @property
+    def needs(self):
+        """Яких матеріалів ще бракує на будові: {"wood": 12}."""
+        return _kn.building_info(self._id, "needs")
+
+
+class Storage(Building):
     _kind = "storage"
 
     def amount(self, resource):
@@ -354,8 +416,36 @@ class Storage(GameObject):
         return _kn.storage_has_tool(self._id, _tool_kind(tool))
 
 
-class House(GameObject):
+class House(Building):
     _kind = "house"
+
+    @property
+    def capacity(self):
+        return _kn.building_info(self._id, "capacity")
+
+    @property
+    def residents(self):
+        return [_wrap(info) for info in _kn.building_info(self._id, "residents")]
+
+    @property
+    def free_places(self):
+        return self.capacity - len(_kn.building_info(self._id, "residents"))
+
+    @property
+    def firewood(self):
+        return _kn.house_info(self._id, "firewood")
+
+    @property
+    def temperature(self):
+        return _kn.house_info(self._id, "temperature")
+
+    @property
+    def is_heated(self):
+        return _kn.house_info(self._id, "heated")
+
+    def has(self, item):
+        """Чи є в скрині будинку одяг: house.has(WarmClothes)."""
+        return _kn.house_chest(self._id, _clothes_kind(item)) > 0
 
 
 class Forest(GameObject):
@@ -364,6 +454,26 @@ class Forest(GameObject):
     @property
     def trees_left(self):
         return _kn.forest_trees(self._id)
+
+
+class Field(Building):
+    _kind = "field"
+
+    @property
+    def state(self):
+        return _kn.field_info(self._id, "state")
+
+    @property
+    def is_ripe(self):
+        return _kn.field_info(self._id, "state") == "ripe"
+
+    @property
+    def growth(self):
+        return _kn.field_info(self._id, "growth")
+
+    @property
+    def grain_left(self):
+        return _kn.field_info(self._id, "grain_left")
 
 
 class Person(GameObject):
@@ -382,8 +492,18 @@ class Person(GameObject):
         return _kn.char_stat(self._id, "health")
 
     @property
+    def warmth(self):
+        return _kn.char_stat(self._id, "warmth")
+
+    @property
+    def clothes(self):
+        kind = _kn.char_clothes(self._id)
+        return None if kind is None else _CLOTHES.get(kind)
+
+    @property
     def tool(self):
-        return _TOOLS.get(_kn.char_tool(self._id))
+        kind = _kn.char_tool(self._id)  # None is unhashable in pocketpy: no dict lookup with it
+        return None if kind is None else _TOOLS.get(kind)
 
     @property
     def carrying(self):
@@ -394,7 +514,7 @@ class Person(GameObject):
         return _wrap(_kn.char_home(self._id))
 
 
-_CLASSES = {"storage": Storage, "house": House, "forest": Forest, "person": Person}
+_CLASSES = {"storage": Storage, "house": House, "forest": Forest, "field": Field, "person": Person}
 
 
 def _wrap(info):
@@ -494,6 +614,44 @@ class Me(Person):
                 _kn.act("wait", -1, {"seconds": step})
         raise TypeError("wait_until() очікує час доби (time(6, 0)) або умову (lambda: ...)")
 
+    def heat(self, house, amount=None):
+        """Покласти в піч будинку дрова, які несе персонаж (усі або amount)."""
+        hid = _id_of(house, House, "heat")
+        p = {}
+        if amount is not None:
+            if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+                raise ValueError("heat(): amount= має бути додатним цілим числом")
+            p["amount"] = amount
+        return _kn.act("heat", hid, p)
+
+    def wear(self, clothes):
+        """Переодягтися вдома: me.wear(WarmClothes) / me.wear(Clothes)."""
+        return _kn.act("wear", -1, {"item": _clothes_kind(clothes)})
+
+    def sow(self, field, until=None, hours=None):
+        return _kn.act("sow", _id_of(field, Field, "sow"), _limits(None, until, hours))
+
+    def harvest(self, field, amount=None, until=None, hours=None):
+        return _kn.act("harvest", _id_of(field, Field, "harvest"), _limits(amount, until, hours))
+
+    def grind(self, house, amount=None, until=None, hours=None):
+        return _kn.act("grind", _id_of(house, House, "grind"), _limits(amount, until, hours))
+
+    def bake(self, house, amount=None, until=None, hours=None):
+        return _kn.act("bake", _id_of(house, House, "bake"), _limits(amount, until, hours))
+
+    def deliver(self, site):
+        """Віднести на будову матеріали, яких їй бракує, з тих, що несе персонаж. Повертає кількість."""
+        return _kn.act("deliver", _id_of(site, Building, "deliver"), None)
+
+    def build(self, site, until=None, hours=None):
+        """Будувати за кресленням (усі матеріали мають бути на місці)."""
+        return _kn.act("build", _id_of(site, Building, "build"), _limits(None, until, hours))
+
+    def move_into(self, house):
+        """Переселитися в збудований будинок (з запасним комплектом одягу)."""
+        return _kn.act("move_into", _id_of(house, House, "move_into"), None)
+
     def travel_time(self, obj):
         return Duration(_kn.travel_time(_id_of(obj, GameObject, "travel_time")))
 
@@ -515,8 +673,8 @@ def get(name):
 
 def buildings(kind):
     """Список будівель заданого типу: buildings(Storage)."""
-    if kind is not Storage and kind is not House and kind is not Forest:
-        raise TypeError("buildings() приймає тип: Storage, House або Forest")
+    if kind is not Storage and kind is not House and kind is not Forest and kind is not Field:
+        raise TypeError("buildings() приймає тип: Storage, House, Forest або Field")
     return [_wrap(info) for info in _kn.list_objects(kind._kind)]
 
 
@@ -578,9 +736,11 @@ _kn.set_dispatch(_dispatch)
 
 __all__ = [
     "Duration", "TimeOfDay", "time", "hours", "minutes",
-    "world", "Event", "EventInfo",
+    "world", "Event", "EventInfo", "Season",
     "ActionError", "NoItemError", "ReservedError", "TooHeavyError", "NoHomeError", "NotFoundError",
-    "Tool", "Axe", "GameObject", "Storage", "House", "Forest", "Person", "Me", "me",
+    "WorkplaceBusyError", "Building",
+    "Tool", "Axe", "Sickle", "Clothes", "WarmClothes",
+    "GameObject", "Storage", "House", "Forest", "Field", "Person", "Me", "me",
     "get", "buildings", "notify", "on",
 ]
 

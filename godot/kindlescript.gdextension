@@ -1,0 +1,11 @@
+[configuration]
+
+entry_symbol = "kindlescript_library_init"
+compatibility_minimum = "4.6"
+reloadable = true
+
+[libraries]
+
+; Built by ./build.ps1 from the repository root (CMake target kindlescript).
+windows.debug.x86_64 = "res://bin/kindlescript.dll"
+windows.release.x86_64 = "res://bin/kindlescript.dll"

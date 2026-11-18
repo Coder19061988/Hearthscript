@@ -168,7 +168,9 @@ void print_summary(Simulation& sim) {
         if (o.kind != ObjKind::Storage) continue;
         std::string res;
         for (const auto& [name, n] : o.resources) res += " " + name + "=" + std::to_string(n);
-        std::printf("  %s:%s, сокир=%d\n", o.name.c_str(), res.c_str(), o.axes);
+        std::string tools;
+        for (const auto& [name, n] : o.tools) tools += " " + name + "=" + std::to_string(n);
+        std::printf("  %s:%s;%s\n", o.name.c_str(), res.c_str(), tools.c_str());
     }
 }
 

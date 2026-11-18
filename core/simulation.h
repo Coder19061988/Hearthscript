@@ -8,13 +8,17 @@
 
 namespace kindle {
 
-// Start scene of the prototype ("Баланс_прототипу.md", section 5).
+// Start scene. Defaults are the scene of the technical prototype ("Баланс_прототипу.md", section 5)
+// plus the MVP objects (field, house chest); the game itself passes its own numbers.
 struct StartScene {
     int characters = 1;
     int axes = 1;
+    int sickles = 0;
     int bread = 10;
+    int grain = 0;
     int trees = 200;
-    double start_time = 5.5 * 3600.0;  // day 1, 05:30
+    int warm_clothes = -1;  // in the house chest; -1 = one per character
+    double start_time = 5.5 * 3600.0;  // day 1, 05:30 (first day of the warm season)
     double hunger = 30, fatigue = 10, health = 100;
 };
 

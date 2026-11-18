@@ -56,6 +56,46 @@ const Field kFields[] = {
     KINDLE_FIELD(rain_latest_start_hour),
     KINDLE_FIELD(rain_work_factor),
     KINDLE_FIELD(rain_extra_fatigue_per_hour),
+    KINDLE_FIELD(season_warm_days),
+    KINDLE_FIELD(season_winter_days),
+    KINDLE_FIELD(temp_warm_avg),
+    KINDLE_FIELD(temp_winter_avg),
+    KINDLE_FIELD(temp_day_amplitude),
+    KINDLE_FIELD(temp_rain_drop),
+    KINDLE_FIELD(comfort_temperature),
+    KINDLE_FIELD(warmth_recover_per_hour),
+    KINDLE_FIELD(warmth_loss_per_degree_hour),
+    KINDLE_FIELD(clothes_bonus),
+    KINDLE_FIELD(warm_clothes_bonus),
+    KINDLE_FIELD(bed_bonus),
+    KINDLE_FIELD(work_heat_bonus),
+    KINDLE_FIELD(warmth_damage_threshold),
+    KINDLE_FIELD(warmth_damage_per_hour),
+    KINDLE_FIELD(warmth_zero_damage_per_hour),
+    KINDLE_FIELD(health_regen_min_warmth),
+    KINDLE_FIELD(wear_minutes),
+    KINDLE_FIELD(house_heated_temperature),
+    KINDLE_FIELD(house_shelter_bonus),
+    KINDLE_FIELD(house_warmup_hours),
+    KINDLE_FIELD(house_cooldown_hours),
+    KINDLE_FIELD(firewood_burn_hours),
+    KINDLE_FIELD(field_seed_grain),
+    KINDLE_FIELD(field_sow_hours),
+    KINDLE_FIELD(field_grow_days),
+    KINDLE_FIELD(field_yield_grain),
+    KINDLE_FIELD(field_harvest_hours),
+    KINDLE_FIELD(grind_minutes_per_unit),
+    KINDLE_FIELD(bake_minutes_per_unit),
+    KINDLE_FIELD(grain_kg),
+    KINDLE_FIELD(flour_kg),
+    KINDLE_FIELD(house_capacity),
+    KINDLE_FIELD(house_build_wood),
+    KINDLE_FIELD(house_build_hours),
+    KINDLE_FIELD(storage_build_wood),
+    KINDLE_FIELD(storage_build_hours),
+    KINDLE_FIELD(field_build_hours),
+    KINDLE_FIELD(move_in_minutes),
+    KINDLE_FIELD(blueprint_min_distance),
 };
 #undef KINDLE_FIELD
 
@@ -146,15 +186,20 @@ bool Balance::load_json_file(const std::string& path, std::string& error, std::v
     }
     std::stringstream buf;
     buf << in.rdbuf();
-    std::string text = buf.str();
+    if (!load_json_text(buf.str(), error, warnings)) {
+        error = path + ": " + error;
+        return false;
+    }
+    return true;
+}
+
+bool Balance::load_json_text(const std::string& source, std::string& error, std::vector<std::string>& warnings) {
+    std::string text = source;
     if (text.size() >= 3 && text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);  // UTF-8 BOM
 
     std::vector<FlatJson::Item> items;
     FlatJson parser(text);
-    if (!parser.parse(items, error)) {
-        error = path + ": " + error;
-        return false;
-    }
+    if (!parser.parse(items, error)) return false;
     for (const auto& item : items) {
         if (!item.key.empty() && item.key[0] == '_') continue;  // comment
         bool known = false;

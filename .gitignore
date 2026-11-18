@@ -2,3 +2,8 @@
 /out/
 .vs/
 *.user
+
+# Godot: editor cache and files produced by the build
+/godot/.godot/
+/godot/bin/
+/godot/data/

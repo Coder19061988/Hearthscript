@@ -35,6 +35,24 @@ char* deny_importfile(const char*, int*) { return nullptr; }
 
 std::string quote(const std::string& s) { return "«" + s + "»"; }
 
+// Sets (or removes, if v == nullptr) a player global in the builtins of the current VM.
+void apply_global(const std::string& name, const World::GlobalValue* v) {
+    py_GlobalRef builtins = py_getmodule("builtins");
+    if (!v) {
+        py_deldict(builtins, py_name(name.c_str()));
+        return;
+    }
+    if (const bool* b = std::get_if<bool>(v))
+        py_newbool(py_r0(), *b);
+    else if (const long long* i = std::get_if<long long>(v))
+        py_newint(py_r0(), *i);
+    else if (const double* d = std::get_if<double>(v))
+        py_newfloat(py_r0(), *d);
+    else
+        py_newstr(py_r0(), std::get<std::string>(*v).c_str());
+    py_setdict(builtins, py_name(name.c_str()), py_r0());
+}
+
 // Raises the prelude-defined exception class `e.type` (NoItemError, ...) with reason and done.
 bool raise_action_error(const ActionError& e) {
     py_ItemRef cls = py_getbuiltin(py_name(e.type.c_str()));
@@ -75,7 +93,7 @@ const char* agent_state_name(AgentState s) {
         case AgentState::Running: return "виконується";
         case AgentState::Finished: return "завершився";
         case AgentState::Crashed: return "зупинений помилкою";
-        case AgentState::Dead: return "помер";
+        case AgentState::Dead: return "зупинено через смерть";
     }
     return "?";
 }
@@ -177,6 +195,8 @@ struct RuntimeNatives {
             py_newfloat(py_retval(), c.fatigue);
         else if (key == "health")
             py_newfloat(py_retval(), c.health);
+        else if (key == "warmth")
+            py_newfloat(py_retval(), c.warmth);
         else
             return ValueError("невідома властивість '%s'", key.c_str());
         return true;
@@ -190,6 +210,17 @@ struct RuntimeNatives {
             py_newnone(py_retval());
         else
             py_newstr(py_retval(), c.tool.c_str());
+        return true;
+    }
+    static bool char_clothes(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(1);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Person, false, &o)) return false;
+        Character& c = world().character(o->id);
+        if (c.clothes.empty())
+            py_newnone(py_retval());
+        else
+            py_newstr(py_retval(), c.clothes.c_str());
         return true;
     }
     static bool char_carrying(int argc, py_StackRef argv) {
@@ -233,8 +264,79 @@ struct RuntimeNatives {
         Object* o = nullptr;
         if (!obj_arg(py_arg(0), ObjKind::Storage, false, &o)) return false;
         PY_CHECK_ARG_TYPE(1, tp_str);
-        bool axe = std::strcmp(py_tostr(py_arg(1)), "axe") == 0;
-        py_newbool(py_retval(), axe && o->axes - o->axes_reserved > 0);
+        const std::string tool = py_tostr(py_arg(1));
+        py_newbool(py_retval(), o->tools[tool] - o->tools_reserved[tool] > 0);
+        return true;
+    }
+    static bool house_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::House, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        std::string key = py_tostr(py_arg(1));
+        if (key == "firewood")
+            py_newfloat(py_retval(), o->firewood);
+        else if (key == "temperature")
+            py_newfloat(py_retval(), o->temperature);
+        else if (key == "heated")
+            py_newbool(py_retval(), o->firewood > 0);
+        else
+            return ValueError("невідома властивість '%s'", key.c_str());
+        return true;
+    }
+    static bool house_chest(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::House, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        py_newint(py_retval(), o->chest[py_tostr(py_arg(1))]);
+        return true;
+    }
+    static bool field_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Field, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        std::string key = py_tostr(py_arg(1));
+        if (key == "state")
+            py_newstr(py_retval(), field_state_name(o->field_state));
+        else if (key == "growth")
+            py_newfloat(py_retval(), o->growth);
+        else if (key == "grain_left")
+            py_newint(py_retval(), o->grain_left);
+        else
+            return ValueError("невідома властивість '%s'", key.c_str());
+        return true;
+    }
+    static bool building_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Storage, true, &o)) return false;
+        if (!is_building(o->kind)) return TypeError("очікується будівля (склад, будинок або поле)");
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        World& w = world();
+        std::string key = py_tostr(py_arg(1));
+        if (key == "built") {
+            py_newbool(py_retval(), o->built);
+        } else if (key == "progress") {
+            py_newfloat(py_retval(), o->built ? 1.0 : (o->build_total > 0 ? o->build_done / o->build_total : 0.0));
+        } else if (key == "needs") {
+            py_newdict(py_r0());
+            for (const auto& [res, n] : w.materials_missing(*o)) {
+                py_newint(py_r1(), n);
+                if (!py_dict_setitem_by_str(py_r0(), res.c_str(), py_r1())) return false;
+            }
+            py_assign(py_retval(), py_r0());
+        } else if (key == "capacity") {
+            py_newint(py_retval(), o->capacity);
+        } else if (key == "residents") {
+            py_newlist(py_r0());
+            for (const Character& c : w.characters())
+                if (c.alive && c.home == o->id) make_info(py_list_emplace(py_r0()), w.objects()[c.obj]);
+            py_assign(py_retval(), py_r0());
+        } else {
+            return ValueError("невідома властивість '%s'", key.c_str());
+        }
         return true;
     }
     static bool forest_trees(int argc, py_StackRef argv) {
@@ -269,6 +371,21 @@ struct RuntimeNatives {
     static bool world_is_raining(int argc, py_StackRef argv) {
         PY_CHECK_ARGC(0);
         py_newbool(py_retval(), world().is_raining_at(me().local_time));
+        return true;
+    }
+    static bool world_season(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(0);
+        py_newstr(py_retval(), season_name(world().season_at(me().local_time)));
+        return true;
+    }
+    static bool world_season_days_left(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(0);
+        py_newint(py_retval(), world().season_days_left(me().local_time));
+        return true;
+    }
+    static bool world_temperature(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(0);
+        py_newfloat(py_retval(), world().outdoor_temperature(me().local_time));
         return true;
     }
     static bool travel_time(int argc, py_StackRef argv) {
@@ -346,6 +463,11 @@ struct RuntimeNatives {
         if (found) {
             if (!py_checkstr(&v)) return false;
             p.tool = py_tostr(&v);
+        }
+        if (!get_param(d, "item", &v, &found)) return false;
+        if (found) {
+            if (!py_checkstr(&v)) return false;
+            p.item = py_tostr(&v);
         }
         if (!get_param(d, "resource", &v, &found)) return false;
         if (found) {
@@ -444,6 +566,11 @@ AgentState ScriptRuntime::state(int char_obj) const {
     return a ? a->state : AgentState::NoCode;
 }
 
+std::string ScriptRuntime::source(int char_obj) const {
+    Agent* a = find_agent(char_obj);
+    return a ? a->source : std::string();
+}
+
 int ScriptRuntime::current_line(int char_obj) const {
     Agent* a = find_agent(char_obj);
     return a ? a->current_line : 0;
@@ -481,6 +608,14 @@ void ScriptRuntime::init_vm(Agent* a) {
     py_bindfunc(kn, "char_stat", RuntimeNatives::char_stat);
     py_bindfunc(kn, "char_tool", RuntimeNatives::char_tool);
     py_bindfunc(kn, "char_carrying", RuntimeNatives::char_carrying);
+    py_bindfunc(kn, "char_clothes", RuntimeNatives::char_clothes);
+    py_bindfunc(kn, "house_info", RuntimeNatives::house_info);
+    py_bindfunc(kn, "house_chest", RuntimeNatives::house_chest);
+    py_bindfunc(kn, "field_info", RuntimeNatives::field_info);
+    py_bindfunc(kn, "building_info", RuntimeNatives::building_info);
+    py_bindfunc(kn, "world_season", RuntimeNatives::world_season);
+    py_bindfunc(kn, "world_season_days_left", RuntimeNatives::world_season_days_left);
+    py_bindfunc(kn, "world_temperature", RuntimeNatives::world_temperature);
     py_bindfunc(kn, "char_home", RuntimeNatives::char_home);
     py_bindfunc(kn, "storage_amount", RuntimeNatives::storage_amount);
     py_bindfunc(kn, "storage_has_tool", RuntimeNatives::storage_has_tool);
@@ -505,6 +640,7 @@ void ScriptRuntime::init_vm(Agent* a) {
         std::fprintf(stderr, "kindle: помилка в prelude.py:\n%s\n", msg ? msg : "?");
         std::abort();
     }
+    for (const auto& [name, value] : world_.globals()) apply_global(name, &value);
     py_sys_settrace(RuntimeNatives::trace_cb, true);
 }
 
@@ -557,6 +693,37 @@ void ScriptRuntime::post_event(const std::string& event) {
         for (const auto& h : a->handlers)
             if (h.event == event) a->pending.push_back({event, h.index, h.priority, a->next_seq++});
     }
+}
+
+bool ScriptRuntime::valid_global_name(const std::string& name) {
+    if (name.empty() || name.size() > 40 || name[0] < 'A' || name[0] > 'Z') return false;
+    for (char ch : name)
+        if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_')) return false;
+    return true;
+}
+
+bool ScriptRuntime::set_global(const std::string& name, const World::GlobalValue& value, std::string& error) {
+    if (!valid_global_name(name)) {
+        error = "Назва глобальної змінної — великі латинські літери, цифри та _ (наприклад, WINTER_MODE)";
+        return false;
+    }
+    world_.set_global(name, value);
+    for (auto& a : agents_) {
+        if (!a || a->vm < 0) continue;
+        py_switchvm(a->vm);
+        apply_global(name, &value);
+    }
+    return true;
+}
+
+bool ScriptRuntime::remove_global(const std::string& name) {
+    if (!world_.remove_global(name)) return false;
+    for (auto& a : agents_) {
+        if (!a || a->vm < 0) continue;
+        py_switchvm(a->vm);
+        apply_global(name, nullptr);
+    }
+    return true;
 }
 
 void ScriptRuntime::run_until(int char_obj, double tick_end) {
@@ -684,8 +851,10 @@ bool ScriptRuntime::deliver_events(Agent* a) {
         py_newint(py_r0(), ev.index);
         py_newstr(py_r1(), ev.event.c_str());
         a->running_priorities.push_back(ev.priority);
+        const int interrupted_line = a->current_line;
         bool ok = py_call(&fn, 2, py_r0());
         a->running_priorities.pop_back();
+        a->current_line = interrupted_line;  // back at the line of the interrupted action
         if (!ok) {
             report_exception(a, ("помилка в обробнику події " + ev.event).c_str());
             return false;

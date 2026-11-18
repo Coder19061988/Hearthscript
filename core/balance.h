@@ -62,10 +62,61 @@ struct Balance {
     double rain_work_factor = 0.7;
     double rain_extra_fatigue_per_hour = 2.0;
 
+    // Seasons and temperature (MVP: warm season + winter; it rains only in the warm season)
+    double season_warm_days = 10.0;
+    double season_winter_days = 5.0;
+    double temp_warm_avg = 16.0;          // °C, daily average
+    double temp_winter_avg = -15.0;
+    double temp_day_amplitude = 5.0;      // coldest at 02:00, warmest at 14:00
+    double temp_rain_drop = 3.0;
+
+    // Warmth of a character (0..100)
+    double comfort_temperature = 10.0;    // perceived temperature at which warmth stops dropping
+    double warmth_recover_per_hour = 10.0;
+    double warmth_loss_per_degree_hour = 0.8;
+    double clothes_bonus = 5.0;           // regular clothes add this to the perceived temperature
+    double warm_clothes_bonus = 20.0;
+    double bed_bonus = 10.0;              // sleeping in a bed at home (instead of clothes)
+    double work_heat_bonus = 5.0;         // heavy work warms up
+    double warmth_damage_threshold = 30.0;
+    double warmth_damage_per_hour = 1.0;
+    double warmth_zero_damage_per_hour = 2.0;
+    double health_regen_min_warmth = 50.0;
+    double wear_minutes = 5.0;
+
+    // House: stove (heating + baking), chest, hand mill
+    double house_heated_temperature = 20.0;
+    double house_shelter_bonus = 5.0;     // an unheated house is this much warmer than outside
+    double house_warmup_hours = 1.0;      // time constants of the inside temperature
+    double house_cooldown_hours = 4.0;
+    double firewood_burn_hours = 2.0;     // one unit of wood in the stove burns this long
+
+    // Field and food chain: field -> grain -> hand mill -> flour -> oven -> bread
+    double field_seed_grain = 10.0;
+    double field_sow_hours = 3.0;
+    double field_grow_days = 4.0;         // growing happens only in the warm season
+    double field_yield_grain = 80.0;
+    double field_harvest_hours = 6.0;
+    double grind_minutes_per_unit = 3.0;
+    double bake_minutes_per_unit = 5.0;
+    double grain_kg = 0.5;
+    double flour_kg = 0.5;
+
+    // Construction from blueprints, moving in
+    double house_capacity = 4.0;
+    double house_build_wood = 40.0;
+    double house_build_hours = 16.0;
+    double storage_build_wood = 30.0;
+    double storage_build_hours = 8.0;
+    double field_build_hours = 4.0;        // ploughing, no materials
+    double move_in_minutes = 10.0;
+    double blueprint_min_distance = 25.0;  // meters to other buildings (forest: + its radius)
+
     // Loads a flat JSON object {"key": number, ...}; keys starting with "_" are comments.
     // Returns false and sets `error` when the file can't be read or parsed.
     // Unknown keys are reported in `warnings` and ignored.
     bool load_json_file(const std::string& path, std::string& error, std::vector<std::string>& warnings);
+    bool load_json_text(const std::string& text, std::string& error, std::vector<std::string>& warnings);
 };
 
 }  // namespace kindle

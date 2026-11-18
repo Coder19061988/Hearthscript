@@ -6,59 +6,113 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Kindlescript** — симулятор середньовічного поселення, де гравець керує персонажами лише Python-кодом; автоматичної поведінки немає. `Hearthscript` — лише назва теки.
 
-Перший технічний прототип (MVP §7) уже реалізовано як консольну програму без графіки: є C++-ядро (світ і виконання коду гравця) та сценарні тести. Godot 4.6 встановлено (`D:\Godot4`), але ще не підключено.
+Що вже є:
+- C++-ядро: світ і виконання коду гравця.
+- Консольний прототип зі сценарними тестами (MVP §7).
+- Підключення до Godot 4.6: GDExtension `kindlescript` і проєкт [godot/](godot/) — 3D-сцена з примітивів та інтерфейс за MVP §6.
+- Механіка MVP:
+  - пори року, тепло й одяг, опалення, поле й ланцюжок хліба;
+  - будівництво за кресленнями (`deliver` / `build`), заселення (`move_into`);
+  - глобальні змінні гравця, робочі місця (`WorkplaceBusyError`).
+
+  Критерій MVP («хороший код переживає першу зиму») перевіряє тест `mvp_winter_survival`.
+- Ще немає: `tools(...)` і `ToolBrokenError` — вони потребують якості та зносу предметів, відкладених у MVP §8.
 
 ## Команди (PowerShell, корінь репозиторію)
 
 ```powershell
-./build.ps1                                   # конфігурація + збірка (CMake з Visual Studio 2022, RelWithDebInfo)
-./build.ps1 -Test                             # усі тести через ctest
+git submodule update --init                   # після клонування: third_party/godot-cpp (тег 10.0.0-stable)
+./build.ps1                                   # збірка всього (CMake з VS 2022, RelWithDebInfo); DLL копіюється в godot/bin
+./build.ps1 -Test                             # усі тести через ctest, включно з godot_smoke
 ./build.ps1 -Test -Filter rain_interrupt      # тести, назва яких містить рядок
-./build/RelWithDebInfo/kindle_proto.exe test rain_interrupt   # один тест напряму; у разі провалу друкує журнал подій
-./build/RelWithDebInfo/kindle_proto.exe list                  # перелік тестів
+./build/RelWithDebInfo/kindle_proto.exe test rain_interrupt   # один сценарний тест; у разі провалу друкує журнал подій
+./build/RelWithDebInfo/kindle_proto.exe list
 ./build/RelWithDebInfo/kindle_proto.exe run scripts/woodcutter.py --days 3 [--chars N] [--no-rain] [--seed N]
-./build/RelWithDebInfo/kindle_proto.exe bench --chars 50 --days 3   # швидкість і пам'ять
+./build/RelWithDebInfo/kindle_proto.exe bench --chars 50 --days 3
+
+# Godot (D:\Godot4). Перший запуск після клонування — спершу ./build.ps1, бо без DLL гра покаже підказку.
+D:\Godot4\Godot_v4.6.2-stable_win64.exe --path godot -e        # редактор
+D:\Godot4\Godot_v4.6.2-stable_win64.exe --path godot           # одразу гра
+D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --headless --path godot --script res://tests/smoke_test.gd
+D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://tests/screenshot.gd -- out=C:/tmp/shot.png hours=5 [help=1]
 ```
 
-- **Новий тест:** додай функцію та рядок у `kTests` у [proto/tests.cpp](proto/tests.cpp), а назву — у `KINDLE_TESTS` у [CMakeLists.txt](CMakeLists.txt). Інакше ctest його не побачить.
-- **Прелюдія:** [core/prelude.py](core/prelude.py) вшивається в бінарник під час збірки, тож після змін у ній потрібна перезбірка.
-- **Баланс:** [config/balance.json](config/balance.json) читається під час запуску, перезбірка не потрібна. Новий параметр додавай у трьох місцях: поле в `Balance` ([core/balance.h](core/balance.h), значення за замовчуванням — з «Баланс_прототипу.md»), запис у `kFields` ([core/balance.cpp](core/balance.cpp)) і ключ у JSON.
+- **Скріншоти.** Інструмент `screenshot.gd` рендерить сцену у вікні й зберігає PNG; так можна перевірити візуальні зміни без редактора.
+- **Новий сценарний тест:** додай функцію та рядок у `kTests` у [proto/tests.cpp](proto/tests.cpp), а назву — у `KINDLE_TESTS` у [CMakeLists.txt](CMakeLists.txt).
+- **Прелюдія:** [core/prelude.py](core/prelude.py) вшивається в бінарник, тож після змін у ній потрібна перезбірка.
+- **Баланс:** [config/balance.json](config/balance.json) читається під час запуску. Новий параметр додавай у трьох місцях: поле в `Balance` ([core/balance.h](core/balance.h)), запис у `kFields` ([core/balance.cpp](core/balance.cpp)) і ключ у JSON.
+- **Дані для Godot:** `config/balance.json`, `scripts/woodcutter.py` і `scripts/mvp/settlement.py` копіюються в `godot/data/` під час збірки (ціль `kindle_godot_data`). Редагуй оригінали, а не копії.
+- **Еталонний скрипт поселення:** [scripts/mvp/settlement.py](scripts/mvp/settlement.py) — код за замовчуванням у грі. Якщо змінюєш баланс або механіку, переконайся, що `mvp_winter_survival` проходить, а `mvp_bad_code` — ні.
 
 ## Документи
 
 Дизайн-документи українською:
 - [План_гри.md](План_гри.md) — повне бачення гри;
-- [MVP.md](MVP.md) — обсяг MVP; §7 описує технічний прототип, §8 — що відкладено;
-- [API_прототипу.md](API_прототипу.md) — назви API, головне джерело для прототипу. Розділ 10 фіксує уточнення семантики, прийняті під час реалізації;
-- [Баланс_прототипу.md](Баланс_прототипу.md) — числа й орієнтири темпу.
+- [MVP.md](MVP.md) — обсяг MVP; §6 описує інтерфейс, §7 — технічний прототип;
+- [API_прототипу.md](API_прототипу.md) — назви API прототипу, головне джерело; розділ 10 фіксує уточнення семантики;
+- [API_MVP.md](API_MVP.md) — розширення API для MVP: пори року, тепло, будинок, поле, будівництво, заселення, глобальні змінні;
+- [Баланс_прототипу.md](Баланс_прототипу.md) — числа й орієнтири темпу; розділи 8–9 — числа MVP.
 
-Якщо змінюєш назву чи семантику API, онови `API_прототипу.md`, `core/prelude.py` і приклади в документах разом.
+Якщо змінюєш назву чи семантику API, онови разом `API_прототипу.md` / `API_MVP.md`, `core/prelude.py`, приклади в документах і довідку F1 ([godot/scripts/help_text.gd](godot/scripts/help_text.gd)).
 
 ## Архітектура
 
-Симуляція та виконання коду гравця живуть у C++-ядрі (`kindle_core`). Godot має стати шаром візуалізації та інтерфейсу поверх нього через GDExtension. Це рішення відходить від MVP §7, де логіку гри планували писати на GDScript.
+Симуляція та виконання коду гравця живуть у C++-ядрі (`kindle_core`). Godot — лише шар візуалізації та інтерфейсу. Це рішення відходить від MVP §7, де логіку гри планували на GDScript.
 
-- **[core/world.h](core/world.h)** — сам світ: об'єкти (склад, будинок, ліс, персонаж), потреби, погода, журнал подій. Дії — це відновлювані машини станів: `begin_action` перевіряє умови й резервує інструмент, `step_action(id, budget)` просуває дію не більше ніж на `budget` секунд, `end_action` / `cancel_actions` знімають резерви. Дія з ціллю сама веде персонажа до цілі на кожному кроці. Тому після переривання вона продовжується з того самого місця, а прогрес рубки (`chop_partial`) зберігається в персонажі. Час кожного персонажа (`local_time`) іде окремо; `pass_time` нараховує голод, втому й здоров'я за типом активності.
+### Ядро (`core/`)
+
+- **[core/world.h](core/world.h)** — світ: об'єкти, потреби, погода, журнал подій.
+  - Дії — відновлювані машини станів: `begin_action` / `step_action(id, budget)` / `end_action`. Дія з ціллю сама веде персонажа до цілі, тож після переривання продовжується з того самого місця.
+  - Кожен персонаж має власний `local_time`.
+  - Збір (рубка, жнива) і перетворення (жорна, піч) — спільні кроки `step_gather` і `step_convert`.
+  - Будинки (піч, температура) й поля (ріст) оновлюються раз на тік в `update_environment`.
+  - Тепло персонажа рахується в `pass_time` за температурою довкола: будинок біля дверей або надворі.
+  - Креслення — це той самий `Object` з `built == false`. Матеріали лежать у `materials_delivered`, прогрес — у `build_done`; недобудоване відхиляється в `begin_action` (`fail_unbuilt`). Нові креслення з'являються посеред гри через `add_blueprint`.
+  - Глобальні змінні гравця зберігаються в `World::globals()`. `ScriptRuntime::set_global` записує їх у builtins кожної VM, а `init_vm` — у нові VM.
 - **[core/runtime.h](core/runtime.h)** — `ScriptRuntime`: на кожного персонажа одна VM pocketpy і одна співпрограма minicoro.
-  - Нативна `_kn.act(...)` виконує дію всередині співпрограми і робить `mco_yield`, коли бюджет тіку вичерпано.
-  - Trace-хук списує 2 с «роздумів» за кожен рядок і теж робить `yield`, тож порожній цикл гру не вішає.
-  - Обробники `@on` викликаються з `deliver_events` у точці дії. Після обробника перервана дія крокує далі.
-  - Якщо код змінено, персонаж помер або обробник упав, співпрограма покидається без розмотування стека (`abandon`) і знищується. VM скидається `py_resetvm` під час наступного `set_code`.
-- **[core/prelude.py](core/prelude.py)** — Python-API з `API_прототипу.md`. Виконується як модуль `kindle` у кожній VM; публічні імена копіюються в builtins. Рядки прелюдії не рахуються як «роздуми».
-- **[core/simulation.h](core/simulation.h)** — `Simulation::tick(dt)`: події погоди → `post_event` → кожен персонаж працює до кінця тіку. Там само `build_start_scene` — стартова сцена з балансу, §5.
-- **[proto/](proto/)** — консольна програма `kindle_proto`: команди `run`, `test`, `list`, `bench`. Тести в `tests.cpp` відповідають пунктам MVP §7 і орієнтирам темпу з балансу, §6.
-- **[third_party/pocketpy](third_party/pocketpy)** — v2.2.0 з локальними патчами, позначеними `KINDLESCRIPT PATCH`; опис — у [PATCHES.md](third_party/pocketpy/PATCHES.md). Під час оновлення pocketpy патчі треба перенести вручну.
+  - Нативна `_kn.act(...)` виконує дію в співпрограмі й робить `mco_yield`, коли бюджет тіку вичерпано.
+  - Trace-хук списує 2 с «роздумів» за кожен рядок.
+  - Обробники `@on` викликаються з `deliver_events` у точці дії.
+  - Якщо код змінено, персонаж помер або обробник упав, співпрограма покидається (`abandon`), а VM скидається під час наступного `set_code`.
+- **[core/prelude.py](core/prelude.py)** — Python-API з `API_прототипу.md`; публічні імена копіюються в builtins.
+- **[core/simulation.h](core/simulation.h)** — `Simulation::tick(dt)` і стартова сцена.
+
+### Інші частини
+
+- **[proto/](proto/)** — консольна програма `kindle_proto` (`run`, `test`, `list`, `bench`).
+- **[gdextension/](gdextension/)** — клас `KindleSimulation` (RefCounted) для GDScript. Методи: `start`, `advance(game_seconds)`, `get_buildings`, `get_characters`, `set_code`, `get_code`, `take_log`, `add_blueprint`, `get_build_costs`, `set_global` / `remove_global` / `get_globals` та гетери часу, погоди й пори року. Повертає Dictionary/Array; позиції — `Vector2` у метрах.
+- **[godot/](godot/)** — проєкт Godot. Сцену й інтерфейс будує код, у `main.tscn` лише корінь зі скриптом:
+  - `main.gd` — щокадру `advance(delta × time_scale × speed)` (не більше 0,25 с реального часу за кадр), потім оновлює вигляд;
+  - `world_view.gd` — 3D: 1 м = 0,2 одиниці; кожна будівля має свій корінь, який перебудовується, коли креслення стає будівлею; підписи персонажів — 2D-мітки над головою;
+  - `camera_rig.gd` — камера;
+  - `game_ui.gd` — верхня панель із меню «Будувати», журнал, бічна панель із вкладками «Код персонажа» (CodeEdit з маркером рядка) і «Глобальні змінні»; режим розміщення креслення живе в `main.gd`;
+  - `tests/` — `smoke_test.gd` (зокрема креслення кліком по карті й глобальна змінна з панелі) і `screenshot.gd` (`construction=1` — сцена будівництва).
+  
+  `godot/bin`, `godot/data` і `godot/.godot` генеруються й ігноруються git.
+- **[third_party/](third_party/)** — бібліотеки:
+  - pocketpy v2.2.0 з патчами `KINDLESCRIPT PATCH` ([PATCHES.md](third_party/pocketpy/PATCHES.md));
+  - minicoro;
+  - godot-cpp — git-субмодуль.
 
 ### Підводні камені
 
-- **Поточна VM у pocketpy глобальна.** Перед відновленням співпрограми завжди викликай `py_switchvm(agent->vm)`, як це робить `run_until`. Поза співпрограмою не виконуй Python-код персонажа.
-- **Python-об'єкти в C-змінних.** Нативні функції не повинні тримати їх у C-локалях між діями чи `yield`. Регістри `py_r0()`… бери лише ненадовго; `py_retval()` не можна передавати як вхідний аргумент.
-- **У винятків pocketpy немає `__dict__`.** Тому `ActionError` зберігає `reason` і `done` в `args` через `_ErrorInfo`, а не в атрибутах.
+- **Поточна VM у pocketpy глобальна.** Перед відновленням співпрограми — `py_switchvm(agent->vm)`, як у `run_until`.
+- **Python-об'єкти в C-змінних.** Нативні функції не тримають їх у C-локалях між діями чи `yield`; `py_retval()` не передавай як вхідний аргумент.
+- **У винятків pocketpy немає `__dict__`.** `ActionError` зберігає `reason` і `done` в `args` через `_ErrorInfo`.
+- **`None` у pocketpy нехешований.** `{...}.get(None)` падає з `TypeError`, тож у прелюдії перевіряй `None` до пошуку в словнику (див. `Person.tool`).
+- **Закінчення рядків.** У git `core.autocrlf=true`. CodeEdit у Godot тримає лише LF, тому код для редактора нормалізуй (`replace(String.chr(13), "")`). Python-скрипти редагування на Windows пиши через `write_bytes`, бо `write_text` тихо перетворює LF на CRLF.
+- **Код гравця виконується всередині співпрограм.** Колбеки ядра, як-от `World::on_log`, викликаються зі стека співпрограми. У GDExtension вони лише складають дані в чергу; Godot API там не викликати.
 - **Пісочниця:**
   - `PK_ENABLE_OS=0`;
-  - `import` заблоковано гардом (дозволено лише під час ініціалізації прелюдії);
+  - `import` заблоковано гардом;
   - `exit`, `input` і `__import__` видалено з builtins.
   
   Якщо додаєш модулі чи вбудовані функції, розшир тест `sandbox`.
-- **Ліміт персонажів:** не більше `PK_MAX_VM_COUNT - 1` = 127. Пам'ять — ~2,6 МБ на персонажа: стек співпрограми 1 МБ плюс VM.
-- **Тексти для гравця** (причини винятків, журнал) пиши українською. Не використовуй родові форми дієслів про персонажів: «Смерть персонажа «X»» замість «помер/померла».
+- **Налаштування збірки godot-cpp:**
+  - `GODOTCPP_API_VERSION=4.6` — підвищуй разом із версією Godot, бо DLL під новіше API не завантажиться в старіший Godot;
+  - винятки C++ увімкнено (`GODOTCPP_DISABLE_EXCEPTIONS=OFF`);
+  - усі цілі збираються зі статичним CRT (`CMAKE_MSVC_RUNTIME_LIBRARY`), інакше лінкування падає;
+  - `/W3` у `kindle_core` — `PRIVATE`, щоб не сипати попередженнями з заголовків godot-cpp.
+- **Відома проблема Godot 4.6.2 + godot-cpp 10.0.0.** Найперший імпорт проєкту (без `godot/.godot`) падає на виході з signal 11. Відтворюється з порожнім класом `RefCounted`, тобто не в нашому коді; наступні запуски працюють. `cmake/godot_smoke.cmake` повторює імпорт один раз.
+- **Ліміт персонажів:** до 127 (`PK_MAX_VM_COUNT - 1`), пам'ять ~2,6 МБ на персонажа.
+- **Тексти для гравця** пиши українською, без родових форм дієслів про персонажів: «Смерть персонажа «X»», а не «помер/померла».
