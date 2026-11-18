@@ -1,0 +1,50 @@
+{
+  "_comment": "Тимчасові числа балансу прототипу. Джерело — Баланс_прототипу.md; ключі збігаються з полями core/balance.h.",
+
+  "day_real_minutes": 12,
+  "night_start_hour": 21,
+  "night_end_hour": 5,
+  "think_seconds_per_line": 2,
+  "idle_log_hours": 4,
+  "time_of_day_grace_minutes": 10,
+
+  "walk_meters_per_minute": 60,
+  "walk_loaded_meters_per_minute": 45,
+  "weight_limit_kg": 50,
+  "wood_kg": 5,
+  "bread_kg": 0.5,
+
+  "tool_take_minutes": 1,
+  "transfer_base_minutes": 1,
+  "transfer_per_unit_minutes": 0.2,
+  "chop_minutes_per_unit": 20,
+  "eat_minutes": 15,
+  "wood_per_tree": 5,
+
+  "hunger_per_hour": 4,
+  "bread_hunger_relief": 40,
+  "hunger_damage_threshold": 80,
+  "hunger_damage_per_hour": 1,
+  "hunger_full_damage_per_hour": 1.5,
+
+  "fatigue_heavy_per_hour": 6,
+  "fatigue_light_per_hour": 3,
+  "fatigue_rest_per_hour": -8,
+  "fatigue_sleep_home_per_hour": -12,
+  "fatigue_sleep_ground_per_hour": -6,
+  "fatigue_slow_threshold": 90,
+  "fatigue_slow_factor": 0.5,
+  "fatigue_full_damage_per_hour": 1,
+
+  "health_regen_per_hour": 1,
+  "health_regen_max_hunger": 50,
+  "health_regen_max_fatigue": 70,
+
+  "rain_chance_per_day": 0.3,
+  "rain_min_hours": 1,
+  "rain_max_hours": 3,
+  "rain_earliest_start_hour": 6,
+  "rain_latest_start_hour": 20,
+  "rain_work_factor": 0.7,
+  "rain_extra_fatigue_per_hour": 2
+}
