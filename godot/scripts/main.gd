@@ -32,6 +32,9 @@ var globals := {}  # the player's global variables; survive "Почати зно
 var placing_kind := ""  # blueprint kind while the player chooses a place
 var placing_pos := Vector2.ZERO
 var naming := false  # the name dialog is open
+# The end-of-game window is shown once per outcome; a loaded game past it does not show it again.
+var survived_shown := false
+var lost_shown := false
 
 
 func _ready() -> void:
@@ -55,6 +58,7 @@ func _ready() -> void:
 	ui.load_requested.connect(ui.ask_load_path)
 	ui.save_path_chosen.connect(_save_to)
 	ui.load_path_chosen.connect(_load_from)
+	ui.outcome_closed.connect(_on_outcome_closed)
 
 	if not ClassDB.class_exists("KindleSimulation"):
 		ui.show_fatal("Розширення kindlescript не завантажено.\nЗберіть його з кореня репозиторію: ./build.ps1\nі перезапустіть Godot.")
@@ -94,6 +98,10 @@ func start_game() -> void:
 ## Rebuilds the view and the interface for the world that is in `sim` now (new game or a loaded one).
 func _show_world() -> void:
 	_stop_placing()
+	ui.hide_outcome()
+	var outcome: Dictionary = sim.get_outcome()
+	survived_shown = outcome["winters_survived"] >= 1
+	lost_shown = outcome["alive"] == 0
 	ui.clear_log()
 	ui.clear_drafts()
 	world_view.build(sim.get_buildings())
@@ -147,6 +155,25 @@ func _process(delta: float) -> void:
 	ui.set_globals(sim.get_globals())
 	for entry in sim.take_log():
 		ui.add_log_entry(entry)
+	check_outcome()
+
+
+## MVP goal: survive the first winter. Pauses the game and shows the end-of-game window once per outcome.
+func check_outcome() -> void:
+	var outcome: Dictionary = sim.get_outcome()
+	var lost: bool = outcome["total"] > 0 and outcome["alive"] == 0
+	var survived: bool = outcome["winters_survived"] >= 1
+	if (lost and not lost_shown) or (survived and not survived_shown and not lost):
+		lost_shown = lost_shown or lost
+		survived_shown = survived_shown or survived
+		_set_speed(0.0)
+		ui.show_outcome(not lost, sim.get_characters(), sim.get_time_text())
+
+
+## "Грати далі" after the first winter resumes the game; after a loss it stays paused (nobody is left).
+func _on_outcome_closed(survived: bool) -> void:
+	if survived:
+		_set_speed(last_speed)
 
 
 func _input(event: InputEvent) -> void:

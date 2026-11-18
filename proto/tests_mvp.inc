@@ -285,6 +285,66 @@ void t_mvp_winter_survival(Ctx& ctx) {
     ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
     ctx.check(min_health > 50, "здоров'я не падало нижче 50");
     ctx.check(min_warmth > 30, "ніхто не мерз узимку");
+    auto outcome = find_log(w, "Першу зиму пережито");
+    ctx.check(w.winters_survived() == 1 && outcome && outcome->kind == LogKind::Outcome &&
+                  outcome->text.find("Вижило 4 з 4") != std::string::npos && outcome->time == at(16, 0),
+              "гра оголосила: першу зиму пережито (о 00:00 першого теплого дня)");
+}
+
+// The end of the game: the first winter survived (once, survives save/load) or everyone dead.
+void t_outcome(Ctx& ctx) {
+    {
+        Opts o;
+        o.chars = 2;
+        o.start_day = 15;  // the last day of the first winter (10 warm + 5 winter days)
+        o.start_hour = 18;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        s.run_until(at(16, 1));
+        auto outcome = find_log(w, "Першу зиму пережито");
+        ctx.check(w.winters_survived() == 1 && outcome && outcome->kind == LogKind::Outcome &&
+                      outcome->text.find("Вижило 2 з 2") != std::string::npos,
+                  "кінець першої зими з живими — «Першу зиму пережито» в журналі");
+
+        std::string text = save_game(s);
+        std::string err;
+        auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+        ctx.check(loaded && loaded->world().winters_survived() == 1, "кількість пережитих зим зберігається: " + err);
+
+        while (w.now() < at(31, 1)) {  // the second winter ends on day 31; characters without code are kept alive
+            s.tick(600);
+            for (Character& c : w.characters()) {
+                c.hunger = c.fatigue = 0;
+                c.warmth = c.health = 100;
+            }
+        }
+        int outcomes = 0;
+        for (const LogEntry& e : w.log_entries()) outcomes += e.kind == LogKind::Outcome ? 1 : 0;
+        ctx.check(w.winters_survived() == 2 && outcomes == 1 && find_log(w, "Пережито зим: 2").has_value(),
+                  "друга зима — звичайний запис, підсумок гри оголошено лише раз");
+    }
+    {
+        Opts o;
+        o.chars = 3;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        for (Character& c : w.characters()) {
+            c.hunger = 100;
+            c.health = 3;
+        }
+        s.run_until(at(1, 12));
+        int deaths = 0, outcomes = 0;
+        for (const LogEntry& e : w.log_entries()) {
+            deaths += e.kind == LogKind::Death ? 1 : 0;
+            outcomes += e.kind == LogKind::Outcome ? 1 : 0;
+        }
+        auto lost = find_log(w, "Усі персонажі загинули");
+        ctx.check(deaths == 3 && outcomes == 1 && lost && lost->kind == LogKind::Outcome, "смерть останнього — «Усі персонажі загинули»");
+        double last_death = 0;
+        for (const Character& c : w.characters()) last_death = std::max(last_death, c.death_time);
+        ctx.check(lost && lost->time == last_death, "підсумок записано в момент останньої смерті");
+        ctx.check(w.alive_count() == 0 && w.winters_survived() == 0, "живих немає, зим не пережито");
+    }
 }
 
 // The other side of the criterion: code that ignores food and winter loses people, and the log says why.

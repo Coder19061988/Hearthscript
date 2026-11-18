@@ -15,7 +15,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - будівництво за кресленнями (`deliver` / `build`), заселення (`move_into`);
   - глобальні змінні гравця, робочі місця (`WorkplaceBusyError`);
   - збереження й завантаження гри (JSON);
-  - спільний код + код персонажа (пріоритет) + `main()`, правила `@on(time(...))` / `@on(lambda: ...)` і `off(...)` (API_MVP.md, розділ 12).
+  - спільний код + код персонажа (пріоритет) + `main()`, правила `@on(time(...))` / `@on(lambda: ...)` і `off(...)` (API_MVP.md, розділ 12);
+  - кінець гри: «Першу зиму пережито» / «Усі персонажі загинули» — запис `LogKind::Outcome` і вікно підсумку (API_MVP.md, розділ 6).
 
   Критерій MVP («хороший код переживає першу зиму») перевіряє тест `mvp_winter_survival`.
 - Ще немає: `tools(...)` і `ToolBrokenError` — вони потребують якості та зносу предметів, відкладених у MVP §8.
@@ -83,18 +84,20 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
   - Якщо код змінено, персонаж помер або обробник упав, співпрограма покидається (`abandon`), а VM скидається під час наступного `set_code`.
 - **[core/prelude.py](core/prelude.py)** — Python-API з `API_прототипу.md`; публічні імена копіюються в builtins.
 - **[core/simulation.h](core/simulation.h)** — `Simulation::tick(dt)` і стартова сцена.
+- **Кінець гри:** `World::winter_ended` (перехід зима → тепла пора) рахує `winters_survived()` і на першій зимі пише `LogKind::Outcome`; `die()` пише `Outcome`, коли помер останній. `LogKind` зберігається числом, тож нові види додавай лише в кінець.
 - **[core/save.h](core/save.h)** — `save_game` / `load_game` (JSON через nlohmann/json). `SaveAccess` — друг `World`. Дії не зберігаються: після завантаження код стартує спочатку, а резерви інструментів і зайнятість робочих місць обнуляються. Якщо додаєш поле в `Object` чи `Character`, додай його в `save.cpp`. Тест `save_load` перевіряє, що «зберегти → завантажити → зберегти» дає той самий файл.
 
 ### Інші частини
 
 - **[proto/](proto/)** — консольна програма `kindle_proto` (`run`, `test`, `list`, `bench`).
-- **[gdextension/](gdextension/)** — клас `KindleSimulation` (RefCounted) для GDScript. Методи: `start`, `advance(game_seconds)`, `get_buildings`, `get_characters`, `set_code`, `get_code`, `take_log`, `add_blueprint`, `get_build_costs`, `set_global` / `remove_global` / `get_globals` та гетери часу, погоди й пори року. Повертає Dictionary/Array; позиції — `Vector2` у метрах.
+- **[gdextension/](gdextension/)** — клас `KindleSimulation` (RefCounted) для GDScript. Методи: `start`, `advance(game_seconds)`, `get_buildings`, `get_characters`, `set_code`, `get_code`, `set_shared_code` / `get_shared_code`, `take_log`, `add_blueprint`, `get_build_costs`, `set_global` / `remove_global` / `get_globals`, `save_game` / `load_game`, `get_outcome` та гетери часу, погоди й пори року. Повертає Dictionary/Array; позиції — `Vector2` у метрах. Для тестів `start` приймає ще `start_day`, `start_hour`, `hunger`, `health`.
 - **[godot/](godot/)** — проєкт Godot. Сцену й інтерфейс будує код, у `main.tscn` лише корінь зі скриптом:
   - `main.gd` — щокадру `advance(delta × time_scale × speed)` (не більше 0,25 с реального часу за кадр), потім оновлює вигляд;
   - `world_view.gd` — 3D: 1 м = 0,2 одиниці; кожна будівля має свій корінь, який перебудовується, коли креслення стає будівлею; підписи персонажів — 2D-мітки над головою;
   - `camera_rig.gd` — камера;
   - `game_ui.gd` — верхня панель із меню «Будувати» і «Гра» (зберегти / завантажити / почати знову), журнал, бічна панель із вкладками «Код персонажа», «Спільний код» (обидві — `code_pane.gd`: CodeEdit, маркер рядка, «Застосувати») і «Глобальні змінні»; режим розміщення креслення, збереження у файл і збереження коду під час «Почати знову» живуть у `main.gd`;
-  - `tests/` — `smoke_test.gd` (зокрема креслення кліком по карті, глобальна змінна з панелі, збереження й завантаження) і `screenshot.gd` (`construction=1` — сцена будівництва, `save_dialog=1` — вікно збереження).
+  - `outcome_dialog.gd` — вікно підсумку гри; `main.gd` (`check_outcome`) показує його раз на результат за `get_outcome()` і ставить гру на паузу;
+  - `tests/` — `smoke_test.gd` (зокрема креслення кліком по карті, глобальна змінна з панелі, збереження й завантаження, обидва вікна підсумку) і `screenshot.gd` (`construction=1` — сцена будівництва, `save_dialog=1` — вікно збереження, `outcome=won|lost` — вікно підсумку).
   
   `godot/bin`, `godot/data` і `godot/.godot` генеруються й ігноруються git.
 - **[third_party/](third_party/)** — бібліотеки:

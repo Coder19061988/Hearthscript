@@ -56,6 +56,7 @@ struct SaveAccess {
         json rain = json::array();
         for (const auto& r : w.rain_) rain.push_back({r.start, r.end});
         j["rain"] = rain;
+        j["winters_survived"] = w.winters_survived_;
 
         json globals = json::object();
         for (const auto& [name, value] : w.globals_) std::visit([&](const auto& v) { globals[name] = v; }, value);
@@ -116,6 +117,7 @@ struct SaveAccess {
         w.weather_days_ = j.at("weather_days").get<int>();
         w.rain_.clear();
         for (const auto& r : j.at("rain")) w.rain_.push_back({r.at(0).get<double>(), r.at(1).get<double>()});
+        w.winters_survived_ = j.value("winters_survived", 0);  // absent in saves made before the outcome existed
 
         w.globals_.clear();
         for (const auto& [name, v] : j.at("globals").items()) {
@@ -199,7 +201,9 @@ struct SaveAccess {
             LogEntry entry;
             entry.time = e.at("time").get<double>();
             entry.object_id = e.at("obj").get<int>();
-            entry.kind = static_cast<LogKind>(e.at("kind").get<int>());
+            const int kind = e.at("kind").get<int>();
+            if (kind < 0 || kind > static_cast<int>(LogKind::Outcome)) throw std::runtime_error("невідомий тип запису журналу");
+            entry.kind = static_cast<LogKind>(kind);
             entry.text = e.at("text").get<std::string>();
             entry.detail = e.at("detail").get<std::string>();
             w.log_.push_back(entry);

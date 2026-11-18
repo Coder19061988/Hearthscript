@@ -60,6 +60,7 @@ std::string format_entry(World& world, const LogEntry& e) {
         case LogKind::Warning: return prefix + "УВАГА: " + e.text;
         case LogKind::Error: return prefix + "ПОМИЛКА: " + e.text;
         case LogKind::Death: return prefix + "СМЕРТЬ: " + e.text;
+        case LogKind::Outcome: return prefix + "ПІДСУМОК: " + e.text;
     }
     return prefix + e.text;
 }

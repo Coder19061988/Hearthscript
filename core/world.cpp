@@ -413,6 +413,7 @@ void World::update_environment(double t0, double t1) {
     if (day_start > t0 && season_at(t0) != season_at(t1)) {
         bool winter = season_at(t1) == Season::Winter;
         log(-1, LogKind::Info, winter ? "Почалася зима" : "Почалася тепла пора", {}, day_start);
+        if (!winter) winter_ended(day_start);
     }
 
     for (Object& o : objects_) {
@@ -560,6 +561,24 @@ void World::die(Character& c, const std::string& cause) {
     c.death_time = c.local_time;
     c.death_cause = cause;
     log(c.obj, LogKind::Death, "Смерть персонажа " + quote(c.name) + ": " + cause);
+    if (alive_count() == 0) log(-1, LogKind::Outcome, "Усі персонажі загинули — поселення спорожніло", {}, c.local_time);
+}
+
+int World::alive_count() const {
+    int n = 0;
+    for (const Character& c : chars_) n += c.alive ? 1 : 0;
+    return n;
+}
+
+void World::winter_ended(double t) {
+    const int alive = alive_count();
+    if (alive == 0) return;
+    ++winters_survived_;
+    const std::string survivors = std::to_string(alive) + " з " + std::to_string(chars_.size());
+    if (winters_survived_ == 1)
+        log(-1, LogKind::Outcome, "Першу зиму пережито! Вижило " + survivors, {}, t);
+    else
+        log(-1, LogKind::Info, "Пережито зим: " + std::to_string(winters_survived_) + ", живих " + survivors, {}, t);
 }
 
 // ---------------------------------------------------------------- actions

@@ -2,7 +2,8 @@ extends SceneTree
 ## Renders the main scene in a window and saves a screenshot (for checking visuals without the editor).
 ## Run: Godot_v4.6.2-stable_win64_console.exe --path godot --script res://tests/screenshot.gd -- out=C:/tmp/shot.png hours=3
 ## Arguments after "--": out=<png path>, hours=<game hours to advance before the shot>, help=1 (open the F1 window),
-## construction=1 (a house blueprint that two characters build), save_dialog=1 (open the save dialog).
+## construction=1 (a house blueprint that two characters build), save_dialog=1 (open the save dialog),
+## outcome=won|lost (the end-of-game window: the first winter survived / everyone starved).
 
 const BUILDERS := """storage = get("Склад_1")
 forest = get("Ліс_1")
@@ -24,7 +25,8 @@ me.move_into(site)
 
 var _main: Node
 var _frames := 0
-var _args := {"out": "user://screenshot.png", "hours": "3", "help": "0", "construction": "0", "save_dialog": "0"}
+var _args := {"out": "user://screenshot.png", "hours": "3", "help": "0", "construction": "0", "save_dialog": "0",
+	"outcome": ""}
 
 
 func _initialize() -> void:
@@ -39,6 +41,13 @@ func _initialize() -> void:
 func _process(_delta: float) -> bool:
 	_frames += 1
 	if _frames == 5:
+		if _args["outcome"] != "":
+			var won: bool = _args["outcome"] == "won"
+			var options := {"characters": 4, "random_rain": false}
+			options.merge({"start_day": 15, "start_hour": 23.5} if won else {"hunger": 100, "health": 2})
+			_main.sim.start(options)
+			_main.sim.set_shared_code(_main.start_shared_code, false)
+			_main._show_world()
 		if _args["construction"] == "1":
 			_main.sim.add_blueprint("house", "Будинок_2", Vector2(60, 100))
 			var characters: Array = _main.sim.get_characters()
@@ -47,6 +56,10 @@ func _process(_delta: float) -> bool:
 			_main.select_character(characters[0]["id"])
 		_main.sim.advance(float(_args["hours"]) * 3600.0)
 		_main._set_speed(0.0)
+		if _args["outcome"] != "":
+			for entry in _main.sim.take_log():
+				_main.ui.add_log_entry(entry)
+			_main.check_outcome()
 		if _args["help"] == "1":
 			_main.ui.show_help()
 		if _args["save_dialog"] == "1":

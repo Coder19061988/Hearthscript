@@ -35,7 +35,8 @@ const char* field_state_name(FieldState s);  // "empty" / "sown" / "ripe"
 // What a character is doing during a slice of time; drives needs (see Balance).
 enum class Activity { Idle, Wait, Light, Heavy, Rest, SleepHome, SleepGround };
 
-enum class LogKind { Info, Notify, Print, Warning, Error, Death };
+// Saved as numbers: add new kinds only at the end.
+enum class LogKind { Info, Notify, Print, Warning, Error, Death, Outcome };  // Outcome: the first winter survived / all dead
 
 struct LogEntry {
     double time = 0;
@@ -229,6 +230,10 @@ public:
     double resolve_time_of_day(double tod, double now) const;
     std::string format_time(double t) const;
 
+    // --- outcome of the game (MVP goal: survive the first winter)
+    int alive_count() const;
+    int winters_survived() const { return winters_survived_; }  // winters that ended with someone alive
+
     // --- time
     std::vector<std::string> begin_tick(double t0, double t1);  // returns events that fired in [t0, t1)
     void end_tick(double t1) { now_ = t1; }
@@ -266,6 +271,7 @@ private:
     StepResult step_recover(Action& a, Character& c, Activity act, double budget, double used);
     void check_thresholds(Character& c);
     void die(Character& c, const std::string& cause);
+    void winter_ended(double t);
 
     Balance balance_;
     std::mt19937_64 rng_;
@@ -280,6 +286,7 @@ private:
     std::vector<RainInterval> rain_;
     std::vector<LogEntry> log_;
     std::map<std::string, GlobalValue> globals_;
+    int winters_survived_ = 0;
 };
 
 }  // namespace kindle

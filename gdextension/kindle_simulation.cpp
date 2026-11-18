@@ -28,6 +28,7 @@ const char* log_kind_name(kindle::LogKind k) {
         case kindle::LogKind::Warning: return "warning";
         case kindle::LogKind::Error: return "error";
         case kindle::LogKind::Death: return "death";
+        case kindle::LogKind::Outcome: return "outcome";
     }
     return "info";
 }
@@ -67,6 +68,7 @@ void KindleSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_season"), &KindleSimulation::get_season);
     ClassDB::bind_method(D_METHOD("get_season_days_left"), &KindleSimulation::get_season_days_left);
     ClassDB::bind_method(D_METHOD("get_temperature"), &KindleSimulation::get_temperature);
+    ClassDB::bind_method(D_METHOD("get_outcome"), &KindleSimulation::get_outcome);
     ClassDB::bind_method(D_METHOD("get_buildings"), &KindleSimulation::get_buildings);
     ClassDB::bind_method(D_METHOD("get_characters"), &KindleSimulation::get_characters);
     ClassDB::bind_method(D_METHOD("add_blueprint", "kind", "name", "position"), &KindleSimulation::add_blueprint);
@@ -103,10 +105,17 @@ void KindleSimulation::start(const Dictionary& options) {
     scene.grain = int(options.get("grain", 0));
     scene.trees = int(options.get("trees", 200));
     scene.warm_clothes = int(options.get("warm_clothes", -1));
+    // For tests and screenshots: another start moment or a weak settlement.
+    const int start_day = int(options.get("start_day", 1));
+    const double start_hour = double(options.get("start_hour", scene.start_time / 3600.0));
+    scene.start_time = (start_day - 1) * kindle::kDay + start_hour * 3600.0;
+    scene.hunger = double(options.get("hunger", scene.hunger));
+    scene.health = double(options.get("health", scene.health));
     const int wood = int(options.get("wood", 0));
     const bool random_rain = bool(options.get("random_rain", true));
     const int64_t seed = int64_t(options.get("seed", 1));
     ERR_FAIL_COND_MSG(scene.characters < 1 || scene.characters > 127, "characters must be 1..127");
+    ERR_FAIL_COND_MSG(start_day < 1 || start_hour < 0 || start_hour >= 24, "start_day must be >= 1, start_hour 0..24");
 
     pending_log_.clear();
     sim_.reset();  // the old runtime must release its VMs before the new one takes them
@@ -148,6 +157,15 @@ String KindleSimulation::get_season() const {
 int KindleSimulation::get_season_days_left() const { return sim_ ? sim_->world().season_days_left(get_now()) : 0; }
 
 double KindleSimulation::get_temperature() const { return sim_ ? sim_->world().outdoor_temperature(get_now()) : 0.0; }
+
+Dictionary KindleSimulation::get_outcome() const {
+    Dictionary d;
+    kindle::World* w = sim_ ? &sim_->world() : nullptr;
+    d["winters_survived"] = w ? w->winters_survived() : 0;
+    d["alive"] = w ? w->alive_count() : 0;
+    d["total"] = w ? int(w->characters().size()) : 0;
+    return d;
+}
 
 Array KindleSimulation::get_buildings() const {
     Array result;
@@ -228,6 +246,8 @@ Array KindleSimulation::get_characters() const {
         const kindle::Object* target = a ? w.object(a->target) : nullptr;
         d["action_target"] = target ? to_godot(target->name) : String();
         d["death_cause"] = to_godot(c.death_cause);
+        d["death_time"] = c.death_time;  // -1 while alive
+        d["death_time_text"] = c.alive ? String() : to_godot(w.format_time(c.death_time));
         result.push_back(d);
     }
     return result;

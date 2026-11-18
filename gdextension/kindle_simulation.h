@@ -23,7 +23,8 @@ public:
     // Balance JSON (same format as config/balance.json). Returns "" or a description of problems.
     godot::String load_balance_json(const godot::String& text);
     // New world with the start scene.
-    // Options: characters, axes, sickles, bread, grain, wood, trees, warm_clothes, random_rain, seed.
+    // Options: characters, axes, sickles, bread, grain, wood, trees, warm_clothes, random_rain, seed;
+    // for tests: start_day (1..), start_hour, hunger, health.
     void start(const godot::Dictionary& options);
     bool is_started() const { return sim_ != nullptr; }
     // Advances the world by `game_seconds` (split into ticks of at most 60 s).
@@ -39,6 +40,9 @@ public:
     godot::String get_season() const;  // "WARM" / "WINTER"
     int get_season_days_left() const;
     double get_temperature() const;    // outside, °C
+    // The MVP goal: {winters_survived, alive, total}. The first winter is survived when winters_survived >= 1;
+    // the game is lost when alive == 0.
+    godot::Dictionary get_outcome() const;
 
     // [{id, kind, name, position: Vector2 (meters), ...}] plus, by kind:
     //   storage: resources, tools; house: firewood, temperature, heated, chest, capacity, residents;
@@ -46,7 +50,7 @@ public:
     //   every building: built, progress (0..1), needs (missing materials), materials_needed
     godot::Array get_buildings() const;
     // [{id, name, position, alive, hunger, fatigue, health, warmth, tool, clothes, carrying, home, state,
-    //   state_text, line, line_file ("own" / "shared" / ""), action, action_target, death_cause}]
+    //   state_text, line, line_file ("own" / "shared" / ""), action, action_target, death_cause, death_time (-1 while alive), death_time_text}]
     godot::Array get_characters() const;
 
     // Blueprint placed by the player: kind "house" / "storage" / "field", position in meters.

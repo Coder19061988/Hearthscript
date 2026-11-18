@@ -702,6 +702,7 @@ const TestCase kTests[] = {
     {"shared_code", "спільний код + код персонажа (пріоритет) + main()", t_shared_code},
     {"rules", "правила: @on(lambda: умова), @on(time(...)), off()", t_rules},
     {"rule_priority", "правила коду персонажа мають пріоритет над спільними", t_rule_priority},
+    {"outcome", "кінець гри: першу зиму пережито / усі загинули", t_outcome},
 };
 
 }  // namespace

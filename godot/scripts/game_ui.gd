@@ -17,8 +17,10 @@ signal save_requested
 signal load_requested
 signal save_path_chosen(path: String)
 signal load_path_chosen(path: String)
+signal outcome_closed(survived: bool)     # the end-of-game window was closed: back to the game
 
 const CodePane := preload("res://scripts/code_pane.gd")
+const OutcomeDialog := preload("res://scripts/outcome_dialog.gd")
 const HelpText := preload("res://scripts/help_text.gd")
 
 const SAVES_DIR := "user://saves"
@@ -40,7 +42,7 @@ const TOOL_NAMES := {"axe": "сокира", "sickle": "серп"}
 const CLOTHES_NAMES := {"clothes": "звичайний", "warm_clothes": "теплий"}
 const LOG_COLORS := {
 	"info": "#d8d8d8", "notify": "#8fd0ff", "print": "#a8a8a8",
-	"warning": "#f0b45a", "error": "#ff6b6b", "death": "#ff8080",
+	"warning": "#f0b45a", "error": "#ff6b6b", "death": "#ff8080", "outcome": "#ffd75e",
 }
 
 var _time_label: Label
@@ -65,6 +67,7 @@ var _name_edit: LineEdit
 var _name_caption: Label
 var _file_dialog: FileDialog
 var _file_dialog_saving := false
+var _outcome: OutcomeDialog
 var _fatal: Label
 
 var _selected := -1
@@ -146,6 +149,12 @@ func _ready() -> void:
 			_file_dialog.set(option, false)
 	_file_dialog.file_selected.connect(_on_file_selected)
 	root.add_child(_file_dialog)
+
+	_outcome = OutcomeDialog.new()
+	_outcome.closed.connect(func(survived: bool) -> void: outcome_closed.emit(survived))
+	_outcome.restart_pressed.connect(func() -> void: restart_requested.emit())
+	_outcome.load_pressed.connect(func() -> void: load_requested.emit())
+	root.add_child(_outcome)
 
 	_fatal = Label.new()
 	_fatal.set_anchors_preset(Control.PRESET_CENTER)
@@ -502,7 +511,10 @@ func add_log_entry(e: Dictionary) -> void:
 	var text: String = e["text"]
 	if e["kind"] == "notify" or e["kind"] == "print":
 		text = who + ": " + text
-	var line := "[color=#808080]%s[/color]  [color=%s]%s[/color]\n" % [e["time_text"], color, _escape(text)]
+	text = _escape(text)
+	if e["kind"] == "outcome":
+		text = "[b]" + text + "[/b]"
+	var line := "[color=#808080]%s[/color]  [color=%s]%s[/color]\n" % [e["time_text"], color, text]
 	_log.append_text(line)
 	_log_lines += 1
 	if _log_lines > LOG_LIMIT:
@@ -522,6 +534,15 @@ func clear_log() -> void:
 
 func show_help() -> void:
 	_help.popup_centered()
+
+
+## The end of the game: the first winter survived or everyone dead (see outcome_dialog.gd).
+func show_outcome(survived: bool, characters: Array, time_text: String) -> void:
+	_outcome.show_outcome(survived, characters, time_text)
+
+
+func hide_outcome() -> void:
+	_outcome.hide()
 
 
 func show_fatal(text: String) -> void:

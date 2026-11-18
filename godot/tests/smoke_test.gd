@@ -121,8 +121,46 @@ func _finish() -> void:
 		if not restored:
 			failures.append("після завантаження зникло креслення")
 	DirAccess.remove_absolute(path)
-	print("Godot smoke: %s, дров на складі %d, записів у журналі %d" % [sim.get_time_text(), wood, _main.ui._log_lines])
+	var smoke_time: String = sim.get_time_text()
+	# The end of the game: a starving settlement dies; the last winter night ends with "пережито".
+	failures.append_array(_check_outcome({"characters": 2, "hunger": 100, "health": 2, "random_rain": false}, false))
+	failures.append_array(_check_outcome({"characters": 2, "start_day": 15, "start_hour": 23.5, "random_rain": false}, true))
+	print("Godot smoke: %s, дров на складі %d, записів у журналі %d" % [smoke_time, wood, _main.ui._log_lines])
 	for f in failures:
 		printerr("FAIL: " + f)
 	print("OK" if failures.is_empty() else "ПРОВАЛ")
 	quit(0 if failures.is_empty() else 1)
+
+
+## A world started with `options` runs 3 game hours; the end-of-game window must show the right outcome once,
+## pause the game, and "Почати знову" from it must start a new world with the player's code kept.
+func _check_outcome(options: Dictionary, survived: bool) -> Array:
+	var problems := []
+	var sim = _main.sim
+	sim.start(options)
+	sim.set_shared_code(_main.start_shared_code, false)
+	_main._show_world()
+	_main._set_speed(1.0)
+	sim.advance(3 * 3600.0)
+	_main.check_outcome()
+	var dialog = _main.ui._outcome
+	var expected := "Першу зиму пережито" if survived else "Усі персонажі загинули"
+	if not dialog.visible or dialog.survived != survived or not dialog._text.get_parsed_text().contains(expected):
+		problems.append("вікно підсумку не показало «%s»" % expected)
+	if not survived and not dialog._text.get_parsed_text().contains("Що виправити в коді"):
+		problems.append("у вікні поразки немає порад, що виправити")
+	if _main.speed != 0.0:
+		problems.append("на підсумку гри («%s») гра не стала на паузу" % expected)
+	dialog.hide()
+	_main.check_outcome()
+	if dialog.visible:
+		problems.append("вікно підсумку («%s») показалося вдруге" % expected)
+	if not survived:
+		dialog._on_custom_action(&"restart")
+		var alive := 0
+		for c in sim.get_characters():
+			alive += 1 if c["alive"] else 0
+		if alive != 4 or sim.get_shared_code() != _main.start_shared_code or _main.speed == 0.0:
+			problems.append("«Почати знову» з вікна поразки: живих %d, спільний код збережено: %s" % [
+				alive, sim.get_shared_code() == _main.start_shared_code])
+	return problems
