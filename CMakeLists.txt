@@ -49,8 +49,9 @@ add_library(kindle_core STATIC
   core/world.cpp
   core/runtime.cpp
   core/simulation.cpp
+  core/save.cpp
   ${KINDLE_GEN_DIR}/prelude_py.h)
-target_include_directories(kindle_core PUBLIC core PRIVATE ${KINDLE_GEN_DIR})
+target_include_directories(kindle_core PUBLIC core PRIVATE ${KINDLE_GEN_DIR} third_party/nlohmann)
 target_link_libraries(kindle_core PUBLIC pocketpy minicoro)
 if(MSVC)
   target_compile_options(kindle_core PUBLIC /utf-8 PRIVATE /W3)  # /W3 only for our code, not godot-cpp headers
@@ -97,7 +98,11 @@ set(KINDLE_TESTS
   construction
   construction_rules
   globals
-  workplace_busy)
+  workplace_busy
+  save_load
+  shared_code
+  rules
+  rule_priority)
 foreach(t IN LISTS KINDLE_TESTS)
   add_test(NAME ${t} COMMAND kindle_proto test ${t})
 endforeach()
@@ -130,7 +135,7 @@ if(KINDLE_GDEXTENSION)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${KINDLE_GODOT_DIR}/data
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/config/balance.json ${KINDLE_GODOT_DIR}/data/balance.json
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/scripts/woodcutter.py ${KINDLE_GODOT_DIR}/data/woodcutter.py
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/scripts/mvp/settlement.py ${KINDLE_GODOT_DIR}/data/settlement.py
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/scripts/start_shared.py ${KINDLE_GODOT_DIR}/data/shared.py
     COMMENT "Copying balance.json and example scripts into godot/data")
 
   # Headless smoke test of the Godot layer (skipped when the Godot executable is not found).

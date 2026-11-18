@@ -46,7 +46,7 @@ public:
     //   every building: built, progress (0..1), needs (missing materials), materials_needed
     godot::Array get_buildings() const;
     // [{id, name, position, alive, hunger, fatigue, health, warmth, tool, clothes, carrying, home, state,
-    //   state_text, line, action, action_target, death_cause}]
+    //   state_text, line, line_file ("own" / "shared" / ""), action, action_target, death_cause}]
     godot::Array get_characters() const;
 
     // Blueprint placed by the player: kind "house" / "storage" / "field", position in meters.
@@ -60,8 +60,17 @@ public:
     bool remove_global(const godot::String& name);
     godot::Dictionary get_globals() const;
 
+    // Whole game as JSON text (see core/save.h).
+    godot::String save_game();
+    // Replaces the current game with a save; returns "" or why it failed (the current game stays then).
+    godot::String load_game(const godot::String& text);
+
+    // The character's own code (runs after the shared code; its definitions win). Restarts the character.
     void set_code(int character_id, const godot::String& code);
     godot::String get_code(int character_id) const;
+    // The settlement's shared code; with `restart`, every living character starts its program again.
+    void set_shared_code(const godot::String& code, bool restart = true);
+    godot::String get_shared_code() const;
     // Log entries since the previous call: [{time_text, kind, who, text, detail}]
     godot::Array take_log();
 

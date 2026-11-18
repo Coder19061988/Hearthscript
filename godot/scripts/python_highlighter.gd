@@ -11,7 +11,7 @@ const BUILTINS := [
 	"tuple", "enumerate", "zip", "sorted", "isinstance", "round", "any", "all", "callable",
 ]
 const API := [
-	"me", "world", "get", "buildings", "time", "hours", "minutes", "notify", "on", "Event", "Season",
+	"me", "world", "get", "buildings", "time", "hours", "minutes", "notify", "on", "off", "Event", "Season",
 	"Axe", "Sickle", "Clothes", "WarmClothes", "Storage", "House", "Forest", "Field",
 	"ActionError", "NoItemError", "ReservedError", "TooHeavyError", "NoHomeError", "NotFoundError",
 	"WorkplaceBusyError", "Building",

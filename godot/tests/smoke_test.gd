@@ -6,6 +6,22 @@ extends SceneTree
 const WARMUP_FRAMES := 60
 const GAME_HOURS := 10.0
 const EDITOR_MARK := "код змінено з редактора"
+const OWN_CODE := """notify("%s")
+
+def work():
+    me.take(Axe, get("Склад_1"))
+    try:
+        me.chop_wood(get("Ліс_1"), amount=5)
+    except TooHeavyError:
+        pass
+    me.drop(get("Склад_1"))
+"""
+const SHARED_RULE := """
+
+@on(time(10, 0))
+def ten_oclock(me):
+    notify("правило спільного коду: 10:00")
+"""
 
 var _main: Node
 var _frames := 0
@@ -26,9 +42,13 @@ func _process(_delta: float) -> bool:
 	if _frames == 1:
 		_start = _main.sim.get_now()
 	if _frames == WARMUP_FRAMES:
-		# The way a player changes code: edit the text of the selected character and press "Застосувати".
-		_main.ui._editor.text = "notify(\"%s\")\n%s" % [EDITOR_MARK, _main.default_code]
-		_main.ui._apply_code()
+		# The way a player changes code: edit the selected character's own code and press "Застосувати".
+		# It overrides work() of the shared code, so this character chops wood within the shared routine.
+		_main.ui._own_pane.editor.text = OWN_CODE % EDITOR_MARK
+		_main.ui._own_pane.apply_code()
+		# ...and the shared code: a new rule for everyone (applying restarts all characters).
+		_main.ui._shared_pane.editor.text = _main.ui._shared_pane.editor.text + SHARED_RULE
+		_main.ui._shared_pane.apply_code()
 		# The way a player places a blueprint: menu -> click on the map -> name.
 		_main._start_placing("house")
 		var click := InputEventMouseButton.new()
@@ -64,8 +84,10 @@ func _finish() -> void:
 		failures.append("журнал подій в інтерфейсі порожній")
 	if not _main.ui._log.get_parsed_text().contains(EDITOR_MARK):
 		failures.append("код, застосований з редактора, не запустився")
-	if _main.ui._is_dirty():
+	if _main.ui._own_pane.is_dirty() or _main.ui._shared_pane.is_dirty():
 		failures.append("після застосування редактор досі позначений як «не застосовано»")
+	if not _main.ui._log.get_parsed_text().contains("правило спільного коду: 10:00"):
+		failures.append("правило, додане до спільного коду в редакторі, не спрацювало")
 	var blueprint := {}
 	for b in sim.get_buildings():
 		if b["name"] == "Будинок_2":
@@ -78,6 +100,27 @@ func _finish() -> void:
 		failures.append("креслення не намальоване у 3D")
 	if sim.get_globals().get("WINTER_MODE") != true or _main.ui._globals_shown.get("WINTER_MODE") != true:
 		failures.append("глобальна змінна з панелі не дійшла до симуляції або до вкладки")
+	# Save and load through the same functions as the "Гра" menu.
+	var path := "user://saves/smoke_test.json"
+	DirAccess.make_dir_recursive_absolute("user://saves")
+	var saved_now: float = sim.get_now()
+	if _main._save_to(path) != "":
+		failures.append("гра не зберіглася")
+	sim.advance(3600.0)  # the loaded game must go back to the saved moment
+	var load_error: String = _main._load_from(path)
+	if load_error != "":
+		failures.append("гра не завантажилася: " + load_error)
+	elif absf(sim.get_now() - saved_now) > 0.5:
+		failures.append("після завантаження інший час: %s" % sim.get_time_text())
+	elif _main.speed != 0.0 or sim.get_globals().get("WINTER_MODE") != true:
+		failures.append("після завантаження гра не на паузі або загубилася глобальна змінна")
+	else:
+		var restored := false
+		for b in sim.get_buildings():
+			restored = restored or (b["name"] == "Будинок_2" and not b["built"])
+		if not restored:
+			failures.append("після завантаження зникло креслення")
+	DirAccess.remove_absolute(path)
 	print("Godot smoke: %s, дров на складі %d, записів у журналі %d" % [sim.get_time_text(), wood, _main.ui._log_lines])
 	for f in failures:
 		printerr("FAIL: " + f)

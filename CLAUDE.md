@@ -13,7 +13,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Механіка MVP:
   - пори року, тепло й одяг, опалення, поле й ланцюжок хліба;
   - будівництво за кресленнями (`deliver` / `build`), заселення (`move_into`);
-  - глобальні змінні гравця, робочі місця (`WorkplaceBusyError`).
+  - глобальні змінні гравця, робочі місця (`WorkplaceBusyError`);
+  - збереження й завантаження гри (JSON);
+  - спільний код + код персонажа (пріоритет) + `main()`, правила `@on(time(...))` / `@on(lambda: ...)` і `off(...)` (API_MVP.md, розділ 12).
 
   Критерій MVP («хороший код переживає першу зиму») перевіряє тест `mvp_winter_survival`.
 - Ще немає: `tools(...)` і `ToolBrokenError` — вони потребують якості та зносу предметів, відкладених у MVP §8.
@@ -25,6 +27,7 @@ git submodule update --init                   # після клонування:
 ./build.ps1                                   # збірка всього (CMake з VS 2022, RelWithDebInfo); DLL копіюється в godot/bin
 ./build.ps1 -Test                             # усі тести через ctest, включно з godot_smoke
 ./build.ps1 -Test -Filter rain_interrupt      # тести, назва яких містить рядок
+./run.ps1 [-Editor] [-NoBuild]                 # зібрати й запустити гру (або відкрити редактор Godot)
 ./build/RelWithDebInfo/kindle_proto.exe test rain_interrupt   # один сценарний тест; у разі провалу друкує журнал подій
 ./build/RelWithDebInfo/kindle_proto.exe list
 ./build/RelWithDebInfo/kindle_proto.exe run scripts/woodcutter.py --days 3 [--chars N] [--no-rain] [--seed N]
@@ -41,8 +44,9 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
 - **Новий сценарний тест:** додай функцію та рядок у `kTests` у [proto/tests.cpp](proto/tests.cpp), а назву — у `KINDLE_TESTS` у [CMakeLists.txt](CMakeLists.txt).
 - **Прелюдія:** [core/prelude.py](core/prelude.py) вшивається в бінарник, тож після змін у ній потрібна перезбірка.
 - **Баланс:** [config/balance.json](config/balance.json) читається під час запуску. Новий параметр додавай у трьох місцях: поле в `Balance` ([core/balance.h](core/balance.h)), запис у `kFields` ([core/balance.cpp](core/balance.cpp)) і ключ у JSON.
-- **Дані для Godot:** `config/balance.json`, `scripts/woodcutter.py` і `scripts/mvp/settlement.py` копіюються в `godot/data/` під час збірки (ціль `kindle_godot_data`). Редагуй оригінали, а не копії.
-- **Еталонний скрипт поселення:** [scripts/mvp/settlement.py](scripts/mvp/settlement.py) — код за замовчуванням у грі. Якщо змінюєш баланс або механіку, переконайся, що `mvp_winter_survival` проходить, а `mvp_bad_code` — ні.
+- **Дані для Godot:** `config/balance.json`, `scripts/woodcutter.py` і `scripts/start_shared.py` (стає `godot/data/shared.py`) копіюються в `godot/data/` під час збірки (ціль `kindle_godot_data`). Редагуй оригінали, а не копії.
+- **Код нової гри:** мінімальний спільний код [scripts/start_shared.py](scripts/start_shared.py) (лише їжа й сон), коду персонажів немає.
+- **Еталонне поселення:** [scripts/mvp/shared.py](scripts/mvp/shared.py) + рядок ролі в коді кожного персонажа (`set_settlement_code` у [proto/tests_mvp.inc](proto/tests_mvp.inc)). Якщо змінюєш баланс або механіку, переконайся, що `mvp_winter_survival` проходить, а `mvp_bad_code` — ні.
 
 ## Документи
 
@@ -70,12 +74,16 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
   - Креслення — це той самий `Object` з `built == false`. Матеріали лежать у `materials_delivered`, прогрес — у `build_done`; недобудоване відхиляється в `begin_action` (`fail_unbuilt`). Нові креслення з'являються посеред гри через `add_blueprint`.
   - Глобальні змінні гравця зберігаються в `World::globals()`. `ScriptRuntime::set_global` записує їх у builtins кожної VM, а `init_vm` — у нові VM.
 - **[core/runtime.h](core/runtime.h)** — `ScriptRuntime`: на кожного персонажа одна VM pocketpy і одна співпрограма minicoro.
+  - Програма персонажа (`fiber_main`): спільний код (`<спільний код>`) → код персонажа (`<код>`) → `main()`, якщо визначена; усе в одному `__main__`. `set_shared_code` перезапускає всіх, `set_code` — одного. `current_file` каже, у якому з двох файлів поточний рядок.
+  - Правила: `Agent::Handler` з `event` = `RAIN` / `RAIN_STOPPED` / `TIME` (`next_fire`) / `CONDITION` (`last`, `last_check`). `check_rules` у `deliver_events` ставить їх у чергу. Умови виконуються через `_kn._check` з `in_condition`: без витрат часу, дії заборонені, ліміт 1000 рядків.
+  - Пріоритет коду персонажа: `rank = priority * 2 + (спільне ? 1 : 0)`; чи правило «своє», визначає `current_file` рядка `@on` у момент `register_handler`. Своє правило з тим самим іменем функції замінює спільне (у прелюдії, `_names` / `_owns`). Правило-умова, що чекало в черзі, перед запуском перевіряє умову ще раз.
   - Нативна `_kn.act(...)` виконує дію в співпрограмі й робить `mco_yield`, коли бюджет тіку вичерпано.
   - Trace-хук списує 2 с «роздумів» за кожен рядок.
   - Обробники `@on` викликаються з `deliver_events` у точці дії.
   - Якщо код змінено, персонаж помер або обробник упав, співпрограма покидається (`abandon`), а VM скидається під час наступного `set_code`.
 - **[core/prelude.py](core/prelude.py)** — Python-API з `API_прототипу.md`; публічні імена копіюються в builtins.
 - **[core/simulation.h](core/simulation.h)** — `Simulation::tick(dt)` і стартова сцена.
+- **[core/save.h](core/save.h)** — `save_game` / `load_game` (JSON через nlohmann/json). `SaveAccess` — друг `World`. Дії не зберігаються: після завантаження код стартує спочатку, а резерви інструментів і зайнятість робочих місць обнуляються. Якщо додаєш поле в `Object` чи `Character`, додай його в `save.cpp`. Тест `save_load` перевіряє, що «зберегти → завантажити → зберегти» дає той самий файл.
 
 ### Інші частини
 
@@ -85,13 +93,14 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
   - `main.gd` — щокадру `advance(delta × time_scale × speed)` (не більше 0,25 с реального часу за кадр), потім оновлює вигляд;
   - `world_view.gd` — 3D: 1 м = 0,2 одиниці; кожна будівля має свій корінь, який перебудовується, коли креслення стає будівлею; підписи персонажів — 2D-мітки над головою;
   - `camera_rig.gd` — камера;
-  - `game_ui.gd` — верхня панель із меню «Будувати», журнал, бічна панель із вкладками «Код персонажа» (CodeEdit з маркером рядка) і «Глобальні змінні»; режим розміщення креслення живе в `main.gd`;
-  - `tests/` — `smoke_test.gd` (зокрема креслення кліком по карті й глобальна змінна з панелі) і `screenshot.gd` (`construction=1` — сцена будівництва).
+  - `game_ui.gd` — верхня панель із меню «Будувати» і «Гра» (зберегти / завантажити / почати знову), журнал, бічна панель із вкладками «Код персонажа», «Спільний код» (обидві — `code_pane.gd`: CodeEdit, маркер рядка, «Застосувати») і «Глобальні змінні»; режим розміщення креслення, збереження у файл і збереження коду під час «Почати знову» живуть у `main.gd`;
+  - `tests/` — `smoke_test.gd` (зокрема креслення кліком по карті, глобальна змінна з панелі, збереження й завантаження) і `screenshot.gd` (`construction=1` — сцена будівництва, `save_dialog=1` — вікно збереження).
   
   `godot/bin`, `godot/data` і `godot/.godot` генеруються й ігноруються git.
 - **[third_party/](third_party/)** — бібліотеки:
   - pocketpy v2.2.0 з патчами `KINDLESCRIPT PATCH` ([PATCHES.md](third_party/pocketpy/PATCHES.md));
   - minicoro;
+  - nlohmann/json v3.11.3 (один заголовок);
   - godot-cpp — git-субмодуль.
 
 ### Підводні камені

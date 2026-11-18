@@ -10,9 +10,9 @@ const GameUI := preload("res://scripts/game_ui.gd")
 const START_OPTIONS := {"characters": 4, "axes": 2, "sickles": 2, "bread": 40, "grain": 30, "trees": 200,
 	"random_rain": true, "seed": 3}
 const BALANCE_PATH := "res://data/balance.json"
-## The reference settlement script (scripts/mvp/settlement.py): one script, roles by name.
-const DEFAULT_CODE_PATH := "res://data/settlement.py"
-const FALLBACK_CODE := "# Код персонажа. F1 — довідка.\nwhile True:\n    me.wait_until(time(6, 0))\n    me.sleep(until=time(6, 0))\n"
+## Shared code of a new game (scripts/start_shared.py): settlers only eat and sleep; the player writes the rest.
+const START_SHARED_CODE_PATH := "res://data/shared.py"
+const FALLBACK_SHARED_CODE := "def main():\n    while True:\n        me.sleep(until=time(6, 0))\n"
 ## A frame never advances more than this much real time (a hitch must not skip hours of game time).
 const MAX_FRAME_SECONDS := 0.25
 const BUILD_PREFIX := {"house": "Будинок", "storage": "Склад", "field": "Поле"}
@@ -27,7 +27,7 @@ var ui: GameUI
 var speed := 1.0
 var last_speed := 1.0
 var selected_id := -1
-var default_code := ""
+var start_shared_code := ""
 var globals := {}  # the player's global variables; survive "Почати знову"
 var placing_kind := ""  # blueprint kind while the player chooses a place
 var placing_pos := Vector2.ZERO
@@ -43,6 +43,7 @@ func _ready() -> void:
 	add_child(ui)
 	ui.speed_selected.connect(_set_speed)
 	ui.code_applied.connect(_on_code_applied)
+	ui.shared_code_applied.connect(_on_shared_code_applied)
 	ui.character_selected.connect(select_character)
 	ui.restart_requested.connect(start_game)
 	ui.build_requested.connect(_start_placing)
@@ -50,6 +51,10 @@ func _ready() -> void:
 	ui.blueprint_cancelled.connect(_stop_placing)
 	ui.global_set.connect(_on_global_set)
 	ui.global_removed.connect(_on_global_removed)
+	ui.save_requested.connect(func() -> void: ui.ask_save_path("поселення_день_%d.json" % sim.get_day()))
+	ui.load_requested.connect(ui.ask_load_path)
+	ui.save_path_chosen.connect(_save_to)
+	ui.load_path_chosen.connect(_load_from)
 
 	if not ClassDB.class_exists("KindleSimulation"):
 		ui.show_fatal("Розширення kindlescript не завантажено.\nЗберіть його з кореня репозиторію: ./build.ps1\nі перезапустіть Godot.")
@@ -61,26 +66,71 @@ func _ready() -> void:
 		push_warning(problems)
 	ui.set_build_costs(sim.get_build_costs())
 	# CodeEdit keeps LF line ends only; normalize, or the editor would always look "not applied".
-	default_code = FileAccess.get_file_as_string(DEFAULT_CODE_PATH).replace(String.chr(13), "")
-	if default_code == "":
-		default_code = FALLBACK_CODE
+	start_shared_code = FileAccess.get_file_as_string(START_SHARED_CODE_PATH).replace(String.chr(13), "")
+	if start_shared_code == "":
+		start_shared_code = FALLBACK_SHARED_CODE
 	start_game()
 
 
+## A new world. "Почати знову" keeps the player's code (shared and every character's, by name),
+## so the colony can be replayed with improved code; the very first game starts with the minimal code.
 func start_game() -> void:
-	_stop_placing()
+	var shared := start_shared_code
+	var own := {}
+	if sim.is_started():
+		shared = sim.get_shared_code()
+		for c in sim.get_characters():
+			own[c["name"]] = sim.get_code(c["id"])
 	sim.start(START_OPTIONS)
 	for name in globals:
 		sim.set_global(name, globals[name])
+	sim.set_shared_code(shared, false)
+	for c in sim.get_characters():
+		sim.set_code(c["id"], own.get(c["name"], ""))
+	_show_world()
+	_set_speed(1.0)
+
+
+## Rebuilds the view and the interface for the world that is in `sim` now (new game or a loaded one).
+func _show_world() -> void:
+	_stop_placing()
 	ui.clear_log()
 	ui.clear_drafts()
 	world_view.build(sim.get_buildings())
+	ui.set_shared_code(sim.get_shared_code())
 	var characters: Array = sim.get_characters()
-	for c in characters:
-		sim.set_code(c["id"], default_code)
 	ui.set_characters(characters)
 	select_character(characters[0]["id"] if not characters.is_empty() else -1)
-	_set_speed(1.0)
+
+
+# ---------------------------------------------------------------- saving
+
+func _save_to(path: String) -> String:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		var message := "Не вдалося зберегти гру: %s" % error_string(FileAccess.get_open_error())
+		ui.add_ui_message("error", message)
+		return message
+	file.store_string(sim.save_game())
+	file.close()
+	ui.add_ui_message("info", "Гру збережено: " + ProjectSettings.globalize_path(path))
+	return ""
+
+
+func _load_from(path: String) -> String:
+	var text := FileAccess.get_file_as_string(path)
+	var error: String = sim.load_game(text) if text != "" else "файл порожній або не читається"
+	if error != "":
+		ui.add_ui_message("error", "Не вдалося завантажити гру: " + error)
+		return error
+	_show_world()
+	globals = sim.get_globals()
+	for entry in sim.take_log():  # the restored history first, then the message below
+		ui.add_log_entry(entry)
+	_set_speed(0.0)
+	ui.add_ui_message("info", "Гру завантажено (%s). Персонажі почнуть свій код спочатку. Пробіл — продовжити." %
+		sim.get_time_text())
+	return ""
 
 
 func _process(delta: float) -> void:
@@ -140,13 +190,15 @@ func _set_speed(value: float) -> void:
 	ui.set_speed(value)
 
 
-func _on_code_applied(code: String, to_all: bool) -> void:
-	if to_all:
-		for c in sim.get_characters():
-			sim.set_code(c["id"], code)
-	elif selected_id >= 0:
+func _on_code_applied(code: String) -> void:
+	if selected_id >= 0:
 		sim.set_code(selected_id, code)
-	ui.mark_applied(code, to_all)
+	ui.mark_applied(code)
+
+
+func _on_shared_code_applied(code: String) -> void:
+	sim.set_shared_code(code)
+	ui.mark_shared_applied(code)
 
 
 func _find_character(characters: Array, id: int) -> Dictionary:

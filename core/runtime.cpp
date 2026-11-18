@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,7 +19,10 @@ namespace kindle {
 namespace {
 
 constexpr const char* kPlayerFile = "<код>";
+constexpr const char* kSharedFile = "<спільний код>";
 constexpr const char* kPreludeFile = "<kindle>";
+constexpr double kRuleCheckSeconds = 60.0;  // conditions of @on(lambda: ...) rules are checked once a game minute
+constexpr int kMaxConditionLines = 1000;    // a condition running longer is treated as an error
 constexpr size_t kFiberStackSize = 1024 * 1024;
 
 bool g_initialized = false;
@@ -69,12 +73,22 @@ bool raise_action_error(const ActionError& e) {
     return py_raise(py_r2());
 }
 
-// Finds the innermost line of player code in a pocketpy traceback.
-int player_line_from_traceback(const std::string& tb) {
-    const std::string needle = std::string("File \"") + kPlayerFile + "\", line ";
-    size_t pos = tb.rfind(needle);
-    if (pos == std::string::npos) return 0;
-    return std::atoi(tb.c_str() + pos + needle.size());
+// Finds the innermost line of player code (own or shared) in a pocketpy traceback.
+int player_line_from_traceback(const std::string& tb, CodeFile& file) {
+    const std::string own = std::string("File \"") + kPlayerFile + "\", line ";
+    const std::string shared = std::string("File \"") + kSharedFile + "\", line ";
+    const size_t own_pos = tb.rfind(own);
+    const size_t shared_pos = tb.rfind(shared);
+    if (own_pos == std::string::npos && shared_pos == std::string::npos) {
+        file = CodeFile::None;
+        return 0;
+    }
+    if (shared_pos == std::string::npos || (own_pos != std::string::npos && own_pos > shared_pos)) {
+        file = CodeFile::Own;
+        return std::atoi(tb.c_str() + own_pos + own.size());
+    }
+    file = CodeFile::Shared;
+    return std::atoi(tb.c_str() + shared_pos + shared.size());
 }
 
 std::string last_nonempty_line(const std::string& s) {
@@ -104,27 +118,45 @@ struct Agent {
     int vm = -1;
     bool vm_dirty = false;  // VM was used before and must be reset
     mco_coro* co = nullptr;
-    std::string source;
+    std::string own_source;
     AgentState state = AgentState::NoCode;
     double tick_end = 0;
     int current_line = 0;
+    CodeFile current_file = CodeFile::None;
     std::string print_buf;
+    bool in_condition = false;  // evaluating the condition of a rule: free of time, no actions allowed
+    int condition_lines = 0;
 
+    // A registered @on rule. `event` is "RAIN", "RAIN_STOPPED", "TIME" (daily at `tod`)
+    // or "CONDITION" (fires when the condition becomes true).
+    // `rank` orders rules (smaller runs first and interrupts larger): the player's priority, and at equal
+    // priority a rule written in the character's own code outranks one from the shared code.
     struct Handler {
         std::string event;
         int index;  // position in the prelude's `_handlers` list
-        int priority;
+        int64_t rank;
+        double tod = 0;
+        double next_fire = 0;  // TIME: next absolute moment
+        int last = -1;         // CONDITION: previous value (-1 = not checked yet)
+        double last_check = -1;
     };
     struct Pending {
         std::string event;
         int index;
-        int priority;
+        int64_t rank;
         uint64_t seq;
     };
     std::vector<Handler> handlers;
     std::vector<Pending> pending;
-    std::vector<int> running_priorities;  // priorities of handlers currently on the stack
+    std::vector<int64_t> running_ranks;  // ranks of handlers currently on the stack
     uint64_t next_seq = 0;
+
+    static int64_t rule_rank(int64_t priority, bool own) { return priority * 2 + (own ? 0 : 1); }
+    Handler* handler(int index) {
+        for (Handler& h : handlers)
+            if (h.index == index) return &h;
+        return nullptr;
+    }
 };
 
 // Native functions of the `_kn` module (used only by core/prelude.py) and VM callbacks.
@@ -405,18 +437,46 @@ struct RuntimeNatives {
         return true;
     }
     static bool register_handler(int argc, py_StackRef argv) {
-        PY_CHECK_ARGC(3);
+        PY_CHECK_ARGC(4);
         PY_CHECK_ARG_TYPE(0, tp_str);
         PY_CHECK_ARG_TYPE(1, tp_int);
         PY_CHECK_ARG_TYPE(2, tp_int);
-        agent()->handlers.push_back({py_tostr(py_arg(0)), static_cast<int>(py_toint(py_arg(1))),
-                                     static_cast<int>(py_toint(py_arg(2)))});
+        double tod = 0;
+        if (!py_castfloat(py_arg(3), &tod)) return false;
+        // A rule belongs to the file of the line that registered it (the @on line), as the trace hook saw it.
+        const bool own = agent()->current_file == CodeFile::Own;
+        int64_t priority = py_toint(py_arg(2));
+        priority = std::clamp<int64_t>(priority, -1'000'000'000, 1'000'000'000);
+        Agent::Handler h;
+        h.event = py_tostr(py_arg(0));
+        h.index = static_cast<int>(py_toint(py_arg(1)));
+        h.rank = Agent::rule_rank(priority, own);
+        h.tod = tod;
+        if (h.event == "TIME") {
+            const double now = me().local_time;
+            h.next_fire = std::floor(now / kDay) * kDay + tod;
+            if (h.next_fire <= now + kEps) h.next_fire += kDay;
+        }
+        agent()->handlers.push_back(h);
+        py_newbool(py_retval(), own);  // the prelude replaces shared rules of the same name with own ones
+        return true;
+    }
+    static bool unregister_handler(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(1);
+        PY_CHECK_ARG_TYPE(0, tp_int);
+        const int index = static_cast<int>(py_toint(py_arg(0)));
+        Agent* a = agent();
+        auto& hs = a->handlers;
+        hs.erase(std::remove_if(hs.begin(), hs.end(), [&](const Agent::Handler& h) { return h.index == index; }), hs.end());
+        auto& ps = a->pending;
+        ps.erase(std::remove_if(ps.begin(), ps.end(), [&](const Agent::Pending& p) { return p.index == index; }), ps.end());
         py_newnone(py_retval());
         return true;
     }
     static bool set_dispatch(int argc, py_StackRef argv) {
-        PY_CHECK_ARGC(1);
+        PY_CHECK_ARGC(2);
         py_setdict(py_getmodule("_kn"), py_name("_dispatch"), py_arg(0));
+        py_setdict(py_getmodule("_kn"), py_name("_check"), py_arg(1));
         py_newnone(py_retval());
         return true;
     }
@@ -483,6 +543,7 @@ struct RuntimeNatives {
         Agent* a = agent();
         if (!a || a->rt->current_ != a || mco_running() != a->co)
             return RuntimeError("дії можна виконувати лише під час роботи коду персонажа");
+        if (a->in_condition) return RuntimeError("умова правила (@on(lambda: ...)) не може виконувати дії");
         std::string kind = py_tostr(py_arg(0));
         int target = static_cast<int>(py_toint(py_arg(1)));
         ActionParams p;
@@ -498,7 +559,15 @@ struct RuntimeNatives {
         int line = 0;
         const char* file = py_Frame_sourceloc(frame, &line);
         if (file && std::strcmp(file, kPreludeFile) == 0) return;  // API internals are free
-        if (file && std::strcmp(file, kPlayerFile) == 0) a->current_line = line;
+        if (!a->in_condition && file) {
+            if (std::strcmp(file, kPlayerFile) == 0) {
+                a->current_line = line;
+                a->current_file = CodeFile::Own;
+            } else if (std::strcmp(file, kSharedFile) == 0) {
+                a->current_line = line;
+                a->current_file = CodeFile::Shared;
+            }
+        }
         a->rt->on_think(a);
     }
     static void print_cb(const char* s) {
@@ -568,7 +637,12 @@ AgentState ScriptRuntime::state(int char_obj) const {
 
 std::string ScriptRuntime::source(int char_obj) const {
     Agent* a = find_agent(char_obj);
-    return a ? a->source : std::string();
+    return a ? a->own_source : std::string();
+}
+
+CodeFile ScriptRuntime::current_file(int char_obj) const {
+    Agent* a = find_agent(char_obj);
+    return a ? a->current_file : CodeFile::None;
 }
 
 int ScriptRuntime::current_line(int char_obj) const {
@@ -628,6 +702,7 @@ void ScriptRuntime::init_vm(Agent* a) {
     py_bindfunc(kn, "travel_time", RuntimeNatives::travel_time);
     py_bindfunc(kn, "notify", RuntimeNatives::notify);
     py_bindfunc(kn, "register_handler", RuntimeNatives::register_handler);
+    py_bindfunc(kn, "unregister_handler", RuntimeNatives::unregister_handler);
     py_bindfunc(kn, "set_dispatch", RuntimeNatives::set_dispatch);
     py_bindfunc(kn, "act", RuntimeNatives::act);
 
@@ -656,23 +731,49 @@ void ScriptRuntime::stop_agent(Agent* a) {
 void ScriptRuntime::set_code(int char_obj, const std::string& source) {
     Agent* a = get_agent(char_obj);
     const bool restart = a->state != AgentState::NoCode;
+    a->own_source = source;
+    start_agent(a, restart);
+}
+
+void ScriptRuntime::set_shared_code(const std::string& source, bool restart) {
+    shared_source_ = source;
+    if (!restart) return;
+    world_.log(-1, LogKind::Info, "Спільний код змінено — усі персонажі почали свій код спочатку");
+    for (const Character& c : world_.characters())
+        if (c.alive) start_agent(get_agent(c.obj), false);
+}
+
+// (Re)starts a character's program: shared code + own code + main(), from the top.
+void ScriptRuntime::start_agent(Agent* a, bool log_restart) {
     stop_agent(a);
-    a->source = source;
     a->handlers.clear();
     a->pending.clear();
-    a->running_priorities.clear();
+    a->running_ranks.clear();
     a->current_line = 0;
+    a->current_file = CodeFile::None;
     a->print_buf.clear();
+    a->in_condition = false;
 
-    Character& c = world_.character(char_obj);
+    Character& c = world_.character(a->char_obj);
     if (!c.alive) {
         a->state = AgentState::Dead;
         return;
     }
+    if (shared_source_.empty() && a->own_source.empty()) {
+        a->state = AgentState::NoCode;
+        return;
+    }
     init_vm(a);
-    if (restart) world_.log(char_obj, LogKind::Info, "Код персонажа " + quote(c.name) + " змінено — виконання почалося спочатку");
+    if (log_restart)
+        world_.log(a->char_obj, LogKind::Info, "Код персонажа " + quote(c.name) + " змінено — виконання почалося спочатку");
 
-    if (!py_compile(source.c_str(), kPlayerFile, EXEC_MODE, false)) {
+    if (!shared_source_.empty() && !py_compile(shared_source_.c_str(), kSharedFile, EXEC_MODE, false)) {
+        report_exception(a, "помилка в спільному коді");
+        py_clearexc(nullptr);
+        a->state = AgentState::Crashed;
+        return;
+    }
+    if (!a->own_source.empty() && !py_compile(a->own_source.c_str(), kPlayerFile, EXEC_MODE, false)) {
         report_exception(a, "помилка в коді");
         py_clearexc(nullptr);
         a->state = AgentState::Crashed;
@@ -691,7 +792,7 @@ void ScriptRuntime::post_event(const std::string& event) {
     for (auto& a : agents_) {
         if (!a || a->state != AgentState::Running) continue;
         for (const auto& h : a->handlers)
-            if (h.event == event) a->pending.push_back({event, h.index, h.priority, a->next_seq++});
+            if (h.event == event) a->pending.push_back({event, h.index, h.rank, a->next_seq++});
     }
 }
 
@@ -751,7 +852,17 @@ void ScriptRuntime::run_until(int char_obj, double tick_end) {
 
 // Runs inside the coroutine.
 void ScriptRuntime::fiber_main(Agent* a) {
-    bool ok = py_exec(a->source.c_str(), kPlayerFile, EXEC_MODE, nullptr);
+    bool ok = true;
+    if (!shared_source_.empty()) ok = py_exec(shared_source_.c_str(), kSharedFile, EXEC_MODE, nullptr);
+    if (ok && !a->own_source.empty()) ok = py_exec(a->own_source.c_str(), kPlayerFile, EXEC_MODE, nullptr);
+    if (ok) {
+        // The settlement's daily routine, unless the character's own code never returned.
+        py_ItemRef main = py_getglobal(py_name("main"));
+        if (main && py_callable(main)) {
+            py_TValue fn = *main;
+            ok = py_call(&fn, 0, py_r0());
+        }
+    }
     flush_print(a, true);
     world_.cancel_actions(a->char_obj);
     if (ok) {
@@ -767,6 +878,16 @@ void ScriptRuntime::fiber_main(Agent* a) {
 
 // Called for every executed line of player code (inside the coroutine).
 void ScriptRuntime::on_think(Agent* a) {
+    if (a->in_condition) {  // conditions of rules cost no game time, but must stay short
+        if (++a->condition_lines > kMaxConditionLines) {
+            world_.log(a->char_obj, LogKind::Error,
+                       quote(world_.character(a->char_obj).name) + ": умова правила виконує понад " +
+                           std::to_string(kMaxConditionLines) + " рядків — код зупинено");
+            world_.cancel_actions(a->char_obj);
+            abandon(a, AgentState::Crashed);
+        }
+        return;
+    }
     Character& c = world_.character(a->char_obj);
     world_.pass_time(c, world_.balance().think_seconds_per_line, Activity::Idle);
     if (!c.alive) {
@@ -828,19 +949,33 @@ bool ScriptRuntime::do_action(Agent* a, const std::string& kind, int target, con
 // Runs pending @on handlers that outrank the handler currently running (if any).
 // Returns false if a handler raised an exception (already reported).
 bool ScriptRuntime::deliver_events(Agent* a) {
+    if (!check_rules(a)) return false;
     for (;;) {
-        const int current = a->running_priorities.empty() ? INT_MAX : a->running_priorities.back();
+        const int64_t current = a->running_ranks.empty() ? INT64_MAX : a->running_ranks.back();
         int best = -1;
         for (int i = 0; i < static_cast<int>(a->pending.size()); ++i) {
             const auto& p = a->pending[i];
-            if (p.priority >= current) continue;
-            if (best < 0 || p.priority < a->pending[best].priority ||
-                (p.priority == a->pending[best].priority && p.seq < a->pending[best].seq))
+            if (p.rank >= current) continue;
+            if (best < 0 || p.rank < a->pending[best].rank ||
+                (p.rank == a->pending[best].rank && p.seq < a->pending[best].seq))
                 best = i;
         }
         if (best < 0) return true;
         Agent::Pending ev = a->pending[best];
         a->pending.erase(a->pending.begin() + best);
+
+        // A condition rule may have waited for a rule that outranks it; it runs only if the condition
+        // still holds (night_sleep that waited for an evening shift until 07:00 must not sleep till 06:00).
+        if (ev.event == "CONDITION") {
+            bool value = false;
+            if (!eval_condition(a, ev.index, value)) return false;
+            Agent::Handler* h = a->handler(ev.index);  // the condition may have called off(...)
+            if (!h) continue;
+            if (!value) {
+                h->last = 0;
+                continue;
+            }
+        }
 
         py_ItemRef dispatch = py_getdict(py_getmodule("_kn"), py_name("_dispatch"));
         if (!dispatch) {
@@ -850,11 +985,13 @@ bool ScriptRuntime::deliver_events(Agent* a) {
         py_TValue fn = *dispatch;
         py_newint(py_r0(), ev.index);
         py_newstr(py_r1(), ev.event.c_str());
-        a->running_priorities.push_back(ev.priority);
+        a->running_ranks.push_back(ev.rank);
         const int interrupted_line = a->current_line;
+        const CodeFile interrupted_file = a->current_file;
         bool ok = py_call(&fn, 2, py_r0());
-        a->running_priorities.pop_back();
+        a->running_ranks.pop_back();
         a->current_line = interrupted_line;  // back at the line of the interrupted action
+        a->current_file = interrupted_file;
         if (!ok) {
             report_exception(a, ("помилка в обробнику події " + ev.event).c_str());
             return false;
@@ -862,13 +999,61 @@ bool ScriptRuntime::deliver_events(Agent* a) {
     }
 }
 
+// Queues TIME rules whose moment came and CONDITION rules whose condition became true.
+// Returns false if a condition raised an exception (already reported).
+bool ScriptRuntime::check_rules(Agent* a) {
+    if (a->in_condition) return true;
+    const double now = world_.character(a->char_obj).local_time;
+    for (size_t i = 0; i < a->handlers.size(); ++i) {
+        Agent::Handler& h = a->handlers[i];
+        if (h.event == "TIME") {
+            if (now + kEps < h.next_fire) continue;
+            a->pending.push_back({h.event, h.index, h.rank, a->next_seq++});
+            while (h.next_fire <= now + kEps) h.next_fire += kDay;
+        } else if (h.event == "CONDITION") {
+            if (h.last_check >= 0 && now - h.last_check < kRuleCheckSeconds) continue;
+            h.last_check = now;
+            const int index = h.index;
+            bool value = false;
+            if (!eval_condition(a, index, value)) return false;
+            // The condition may have called off(...): find the rule again.
+            Agent::Handler* again = a->handler(index);
+            if (!again) continue;
+            const bool queued = std::any_of(a->pending.begin(), a->pending.end(),
+                                            [&](const Agent::Pending& p) { return p.index == index; });
+            if (value && again->last != 1 && !queued) a->pending.push_back({again->event, index, again->rank, a->next_seq++});
+            again->last = value ? 1 : 0;
+        }
+    }
+    return true;
+}
+
+bool ScriptRuntime::eval_condition(Agent* a, int index, bool& value) {
+    py_ItemRef check = py_getdict(py_getmodule("_kn"), py_name("_check"));
+    if (!check) return true;
+    py_TValue fn = *check;
+    py_newint(py_r0(), index);
+    a->in_condition = true;
+    a->condition_lines = 0;
+    const bool ok = py_call(&fn, 1, py_r0());
+    a->in_condition = false;
+    if (!ok) {
+        report_exception(a, "помилка в умові правила");
+        return false;
+    }
+    value = py_tobool(py_retval());
+    return true;
+}
+
 void ScriptRuntime::report_exception(Agent* a, const char* context) {
     char* raw = py_formatexc();
     std::string tb = raw ? raw : "";
     if (raw) py_free(raw);
-    int line = player_line_from_traceback(tb);
+    CodeFile file = CodeFile::None;
+    int line = player_line_from_traceback(tb, file);
     std::string text = quote(world_.character(a->char_obj).name) + ": " + context;
-    if (line > 0) text += " (рядок " + std::to_string(line) + ")";
+    if (line > 0 && file == CodeFile::Shared) text += " (спільний код, рядок " + std::to_string(line) + ")";
+    if (line > 0 && file == CodeFile::Own) text += " (рядок " + std::to_string(line) + ")";
     text += " — " + last_nonempty_line(tb);
     world_.log(a->char_obj, LogKind::Error, text, tb);
 }

@@ -1,5 +1,7 @@
 #include "kindle_simulation.h"
 
+#include "save.h"
+
 #include <cmath>
 #include <map>
 #include <string>
@@ -72,8 +74,12 @@ void KindleSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_global", "name", "value"), &KindleSimulation::set_global);
     ClassDB::bind_method(D_METHOD("remove_global", "name"), &KindleSimulation::remove_global);
     ClassDB::bind_method(D_METHOD("get_globals"), &KindleSimulation::get_globals);
+    ClassDB::bind_method(D_METHOD("save_game"), &KindleSimulation::save_game);
+    ClassDB::bind_method(D_METHOD("load_game", "text"), &KindleSimulation::load_game);
     ClassDB::bind_method(D_METHOD("set_code", "character_id", "code"), &KindleSimulation::set_code);
     ClassDB::bind_method(D_METHOD("get_code", "character_id"), &KindleSimulation::get_code);
+    ClassDB::bind_method(D_METHOD("set_shared_code", "code", "restart"), &KindleSimulation::set_shared_code, DEFVAL(true));
+    ClassDB::bind_method(D_METHOD("get_shared_code"), &KindleSimulation::get_shared_code);
     ClassDB::bind_method(D_METHOD("take_log"), &KindleSimulation::take_log);
 }
 
@@ -215,6 +221,8 @@ Array KindleSimulation::get_characters() const {
         d["state"] = state_id(state);
         d["state_text"] = to_godot(kindle::agent_state_name(state));
         d["line"] = rt.current_line(c.obj);
+        const kindle::CodeFile file = rt.current_file(c.obj);
+        d["line_file"] = file == kindle::CodeFile::Shared ? "shared" : (file == kindle::CodeFile::Own ? "own" : "");
         const kindle::Action* a = w.current_action(c.obj);
         d["action"] = a ? to_godot(a->name) : String();
         const kindle::Object* target = a ? w.object(a->target) : nullptr;
@@ -290,12 +298,35 @@ Dictionary KindleSimulation::get_globals() const {
     return d;
 }
 
+String KindleSimulation::save_game() {
+    ERR_FAIL_COND_V_MSG(!sim_, String(), "call start() first");
+    return to_godot(kindle::save_game(*sim_));
+}
+
+String KindleSimulation::load_game(const String& text) {
+    std::string error;
+    auto loaded = kindle::load_game(balance_, to_std(text), error);
+    if (!loaded) return to_godot(error);
+    sim_ = std::move(loaded);  // the old game goes away only now, after a successful load
+    // The restored history goes to the UI log; new entries are queued as usual.
+    pending_log_ = sim_->world().log_entries();
+    sim_->world().on_log = [this](const kindle::LogEntry& e) { pending_log_.push_back(e); };
+    return String();
+}
+
 void KindleSimulation::set_code(int character_id, const String& code) {
     ERR_FAIL_COND_MSG(!sim_, "call start() first");
     const kindle::Object* o = sim_->world().object(character_id);
     ERR_FAIL_COND_MSG(!o || o->kind != kindle::ObjKind::Person, "not a character id");
     sim_->runtime().set_code(character_id, to_std(code));
 }
+
+void KindleSimulation::set_shared_code(const String& code, bool restart) {
+    ERR_FAIL_COND_MSG(!sim_, "call start() first");
+    sim_->runtime().set_shared_code(to_std(code), restart);
+}
+
+String KindleSimulation::get_shared_code() const { return sim_ ? to_godot(sim_->runtime().shared_code()) : String(); }
 
 String KindleSimulation::get_code(int character_id) const {
     if (!sim_) return String();

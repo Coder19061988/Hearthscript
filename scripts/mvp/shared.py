@@ -1,11 +1,13 @@
-# Поселення: один скрипт для всіх персонажів, роль — за іменем.
-#   Остап, Богдан — лісоруби: рубають дрова рейсами до вечора.
-#   Марта — фермерка: сіє і жне, а поки поле росте — відпочиває.
-#   Ярина — пекарка: меле зерно, пече хліб і тримає піч розпаленою.
-# День складається з коротких завдань до 18:00; між ними персонаж їсть,
-# а якщо роботи немає — годину відпочиває вдома й перевіряє знову.
-# Узимку всі вдягають теплий одяг, а на ніч у печі лишаються дрова.
-# Еталонний «хороший» скрипт: з ним поселення переживає першу зиму (тест mvp_winter_survival).
+# Спільний код еталонного поселення: виконується в кожного персонажа першим.
+# Тут — функції, ролі, правила для всіх і розпорядок дня main().
+# Код персонажа виконується після спільного й має пріоритет — досить вибрати роль:
+#   Остап, Богдан:  work = woodcutter
+#   Марта:          work = farmer
+#   Ярина:          work = baker
+#                   def evening():
+#                       if world.season == Season.WINTER:
+#                           keep_fire(NIGHT_FIREWOOD)
+# З цим кодом поселення переживає першу зиму (тест mvp_winter_survival).
 
 storage = get("Склад_1")
 house = get("Будинок_1")
@@ -17,11 +19,15 @@ BREAD_STOCK = 30     # пекарка пече, поки на складі ме�
 NIGHT_FIREWOOD = 8   # стільки дров має бути в печі на зимову ніч (одна одиниця горить 2 год)
 
 
+# ---- правила для всіх
+
 @on(Event.RAIN, priority=1)
 def hide_from_rain(me):
     me.go_home()
     me.wait_until(lambda: not world.is_raining, timeout=hours(3))
 
+
+# ---- допоміжні функції
 
 def eat_until(limit):
     """Їсти хліб, поки голод вищий за limit."""
@@ -49,7 +55,7 @@ def keep_fire(units):
         me.heat(house)
 
 
-# Кожна роль — одне завдання. Повертає True, якщо щось зробила.
+# ---- ролі: кожна виконує одне завдання й повертає True, якщо щось зробила
 
 def woodcutter():
     try:
@@ -78,6 +84,8 @@ def baker():
 
 
 def farmer():
+    # Пече лише пекарка: якби фермерка теж брала зерно, обидві могли б одночасно
+    # побачити «зайве» зерно на складі й разом забрати те, що лишали на посів.
     if field.state == "empty" and world.season == Season.WARM and storage.amount("grain") >= SEEDS:
         me.pick_up(storage, "grain", SEEDS)
         me.sow(field)
@@ -90,26 +98,35 @@ def farmer():
             pass
         me.drop(storage)
         return True
-    # Пече лише пекарка: якби фермерка теж брала зерно, обидві могли б одночасно
-    # побачити «зайве» зерно на складі й разом забрати те, що лишали на посів.
     return False
 
 
-ROLES = {"Остап": woodcutter, "Богдан": woodcutter, "Марта": farmer, "Ярина": baker}
-role = ROLES.get(me.name, woodcutter)
+# ---- розпорядок дня; персонаж змінює його, перевизначаючи work() чи evening()
 
-while True:
-    me.wait_until(time(6, 0))
-    dress_for_season()
-    while world.time < time(18, 0):
-        eat_until(40)
-        if not role():
-            me.go_home()  # узимку надворі холодно — відпочивати краще вдома
-            me.rest(hours=1)
-    if me.tool is not None:
-        me.put_back(storage)
-    if role == baker and world.season == Season.WINTER:
-        keep_fire(NIGHT_FIREWOOD)
-    me.drop(storage)
-    eat_until(10)
-    me.sleep(until=time(6, 0))
+def work():
+    """Роль персонажа; без ролі він відпочиває."""
+    return False
+
+
+def evening():
+    """Що зробити ввечері після роботи."""
+    pass
+
+
+def main():
+    while True:
+        if not (time(6, 0) <= world.time < time(18, 0)):
+            # Код (пере)запущено ввечері чи вночі — після зміни коду або завантаження гри: спершу виспатися.
+            me.sleep(until=time(6, 0))
+        dress_for_season()
+        while world.time < time(18, 0):
+            eat_until(40)
+            if not work():
+                me.go_home()  # узимку надворі холодно — відпочивати краще вдома
+                me.rest(hours=1)
+        if me.tool is not None:
+            me.put_back(storage)
+        evening()
+        me.drop(storage)
+        eat_until(10)
+        me.sleep(until=time(6, 0))

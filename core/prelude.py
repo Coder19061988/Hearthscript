@@ -239,6 +239,8 @@ world = _World()
 class Event:
     RAIN = "RAIN"
     RAIN_STOPPED = "RAIN_STOPPED"
+    TIME = "TIME"            # event.kind for @on(time(22, 0))
+    CONDITION = "CONDITION"  # event.kind for @on(lambda: ...)
 
 
 _EVENTS = (Event.RAIN, Event.RAIN_STOPPED)
@@ -683,8 +685,20 @@ def notify(text):
     _kn.notify(str(text))
 
 
-_handlers = []
+_handlers = []    # registered rule handlers; None after off()
 _arities = []
+_events = []      # what each rule listens to (event name, TimeOfDay or condition)
+_conditions = []  # condition of each CONDITION rule (None for the others)
+_names = []       # function name of each rule ("" for lambdas)
+_owns = []        # True for rules written in the character's own code
+
+
+def _fn_name(fn):
+    try:
+        name = fn.__name__
+    except Exception:
+        return ""
+    return "" if not isinstance(name, str) or name == "<lambda>" else name
 
 
 def _arity(fn):
@@ -702,18 +716,44 @@ def _arity(fn):
 
 
 def on(event, handler=None, priority=1):
-    """Обробник події: @on(Event.RAIN, priority=1) або on(Event.RAIN, handler, priority=1)."""
-    if event not in _EVENTS:
-        raise ValueError(f"невідома подія {event!r}")
+    """Правило, яке перериває будь-який код персонажа:
+    @on(Event.RAIN) — подія; @on(time(22, 0)) — щодня о 22:00;
+    @on(lambda: умова) — коли умова стає істинною (перевіряється щохвилини, без витрат часу).
+    Можна й без декоратора: on(подія, функція, priority=1). Менше число priority — вищий пріоритет.
+    Правило з коду персонажа має пріоритет над правилом спільного коду з тим самим priority,
+    а правило з тим самим іменем функції замінює спільне."""
+    if isinstance(event, TimeOfDay):
+        kind = "TIME"
+        tod = event.seconds % _DAY
+    elif callable(event):
+        kind = "CONDITION"
+        tod = 0.0
+    elif event in _EVENTS:
+        kind = event
+        tod = 0.0
+    else:
+        raise ValueError(f"невідома подія {event!r}: очікується Event.RAIN, time(22, 0) або lambda: умова")
     if not isinstance(priority, int) or isinstance(priority, bool):
         raise TypeError("priority= має бути цілим числом (менше число — вищий пріоритет)")
 
     def register(fn):
         if not callable(fn):
             raise TypeError("обробник події має бути функцією")
+        index = len(_handlers)
+        name = _fn_name(fn)
         _handlers.append(fn)
         _arities.append(_arity(fn))
-        _kn.register_handler(event, len(_handlers) - 1, priority)
+        _events.append(event)
+        _conditions.append(event if kind == "CONDITION" else None)
+        _names.append(name)
+        own = _kn.register_handler(kind, index, priority, float(tod))
+        _owns.append(own)
+        # The character's own code wins: its rule replaces the shared rule(s) with the same function name.
+        if own and name:
+            for i in range(index):
+                if _handlers[i] is not None and not _owns[i] and _names[i] == name:
+                    _kn.unregister_handler(i)
+                    _handlers[i] = None
         return fn
 
     if handler is None:
@@ -722,15 +762,38 @@ def on(event, handler=None, priority=1):
     return handler
 
 
+def off(target):
+    """Відмінити правило для цього персонажа: off(функція_правила), off(Event.RAIN), off(time(22, 0)).
+    Повертає, скільки правил відмінено."""
+    removed = 0
+    for i in range(len(_handlers)):
+        if _handlers[i] is None:
+            continue
+        same = _handlers[i] is target or _events[i] is target
+        if not same and not callable(target):
+            same = _events[i] == target
+        if same:
+            _kn.unregister_handler(i)
+            _handlers[i] = None
+            removed += 1
+    return removed
+
+
 def _dispatch(index, kind):
     fn = _handlers[index]
+    if fn is None:
+        return
     if _arities[index] >= 2:
         fn(me, EventInfo(kind))
     else:
         fn(me)
 
 
-_kn.set_dispatch(_dispatch)
+def _check(index):
+    return bool(_conditions[index]())
+
+
+_kn.set_dispatch(_dispatch, _check)
 
 # ------------------------------------------------------------------ export + sandbox
 
@@ -741,7 +804,7 @@ __all__ = [
     "WorkplaceBusyError", "Building",
     "Tool", "Axe", "Sickle", "Clothes", "WarmClothes",
     "GameObject", "Storage", "House", "Forest", "Field", "Person", "Me", "me",
-    "get", "buildings", "notify", "on",
+    "get", "buildings", "notify", "on", "off",
 ]
 
 for _name in __all__:

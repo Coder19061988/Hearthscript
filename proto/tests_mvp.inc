@@ -1,6 +1,33 @@
 // MVP scenarios: seasons, warmth and clothes, heating, the food chain, survival of the first winter.
 // Included into tests.cpp (inside its anonymous namespace): uses Ctx, Opts, at(), find_log() etc.
 
+// The reference settlement: shared code + one role line of own code per character (scripts/mvp/shared.py).
+bool set_settlement_code(Ctx& ctx, Simulation& s, std::string* shared_out = nullptr) {
+    std::string shared;
+    if (!load_script(ctx, "scripts/mvp/shared.py", shared)) return false;
+    s.runtime().set_shared_code(shared, false);
+    const std::map<std::string, std::string> roles = {
+        {"Остап", "work = woodcutter\n"},
+        {"Богдан", "work = woodcutter\n"},
+        {"Марта", "work = farmer\n"},
+        {"Ярина", "work = baker\n\ndef evening():\n    if world.season == Season.WINTER:\n        keep_fire(NIGHT_FIREWOOD)\n"},
+    };
+    for (Character& c : s.world().characters()) {
+        auto it = roles.find(c.name);
+        s.runtime().set_code(c.obj, it == roles.end() ? "" : it->second);
+    }
+    if (shared_out) *shared_out = shared;
+    return true;
+}
+
+// Log entries of one character that contain `needle`.
+std::vector<LogEntry> logs_of(World& w, int obj, const std::string& needle) {
+    std::vector<LogEntry> out;
+    for (const LogEntry& e : w.log_entries())
+        if (e.object_id == obj && e.text.find(needle) != std::string::npos) out.push_back(e);
+    return out;
+}
+
 void t_seasons(Ctx& ctx) {
     Simulation& s = ctx.sim({});
     World& w = s.world();
@@ -222,12 +249,10 @@ expect(lambda: me.sow(field), ActionError, "посів узимку")
 
 // MVP success criterion: good code survives the first winter.
 void t_mvp_winter_survival(Ctx& ctx) {
-    std::string source;
-    if (!load_script(ctx, "scripts/mvp/settlement.py", source)) return;
     Opts o = mvp_opts();
     Simulation& s = ctx.sim(o);
     World& w = s.world();
-    for (Character& c : w.characters()) s.runtime().set_code(c.obj, source);
+    if (!set_settlement_code(ctx, s)) return;
 
     double min_health = 100, min_warmth = 100;
     std::string winter_start;
@@ -427,4 +452,257 @@ except WorkplaceBusyError as e:
     ctx.check(count_log(w, "змолото 5") == 1, "жорна дісталися одному персонажу");
     ctx.check(count_log(w, "жорна зайняті:") == 1, "другий отримав WorkplaceBusyError");
     ctx.check(find_log(w, "змолото після очікування 5").has_value(), "коли жорна звільнилися, другий теж змолов");
+}
+
+// ------------------------------------------------------------------ MVP: saving and loading
+
+void t_save_load(Ctx& ctx) {
+    Simulation& s = ctx.sim(mvp_opts());
+    World& w = s.world();
+    std::string err;
+    w.add_blueprint(ObjKind::House, "Будинок_2", {60, 100}, err);
+    s.runtime().set_global("WINTER_MODE", true, err);
+    std::string shared;
+    if (!set_settlement_code(ctx, s, &shared)) return;
+    s.run_until(at(3, 12));
+
+    const std::string saved = save_game(s);
+    ctx.info("розмір збереження: " + std::to_string(saved.size() / 1024) + " КБ");
+    static Balance balance = proto::load_balance(proto::source_path("config/balance.json"), false);
+    auto loaded = load_game(balance, saved, err);
+    ctx.check(loaded != nullptr, "збереження завантажилося: " + err);
+    if (!loaded) return;
+    World& lw = loaded->world();
+    ctx.check(save_game(*loaded) == saved, "зберегти → завантажити → зберегти дає той самий файл");
+    ctx.check(lw.now() == w.now(), "час гри відновлено");
+    ctx.check(obj(lw, "Склад_1").resources == obj(w, "Склад_1").resources, "склад відновлено");
+    ctx.check(obj(lw, "Поле_1").field_state == obj(w, "Поле_1").field_state &&
+                  obj(lw, "Поле_1").growth == obj(w, "Поле_1").growth,
+              "поле відновлено");
+    ctx.check(!obj(lw, "Будинок_2").built && obj(lw, "Будинок_2").materials_needed["wood"] == 40,
+              "креслення відновлено");
+    ctx.check(lw.globals().count("WINTER_MODE") == 1, "глобальні змінні відновлено");
+    bool same_people = lw.characters().size() == w.characters().size();
+    for (size_t i = 0; same_people && i < w.characters().size(); ++i) {
+        const Character& a = w.characters()[i];
+        const Character& b = lw.characters()[i];
+        same_people = a.name == b.name && a.hunger == b.hunger && a.warmth == b.warmth && a.home == b.home &&
+                      a.carrying == b.carrying && a.tool == b.tool && lw.objects()[b.obj].pos.x == w.objects()[a.obj].pos.x;
+    }
+    ctx.check(same_people, "персонажі відновлені: потреби, речі, дім, позиція");
+    ctx.check(loaded->runtime().shared_code() == shared &&
+                  loaded->runtime().source(lw.char_obj_id(0)) == "work = woodcutter\n",
+              "спільний код і код персонажів відновлено");
+    ctx.check(lw.log_entries().size() == std::min<size_t>(w.log_entries().size(), 500), "журнал подій відновлено");
+
+    // Characters start their code from the top and keep living: the colony still survives the first winter.
+    loaded->run_until(at(16, 6), 120);
+    int alive = 0;
+    for (Character& c : lw.characters()) alive += c.alive ? 1 : 0;
+    int errors = 0;
+    for (const LogEntry& e : lw.log_entries()) errors += e.kind == LogKind::Error ? 1 : 0;
+    ctx.info("після завантаження на 3-й день: живих " + std::to_string(alive) + "/4 на кінець зими");
+    ctx.check(alive == 4 && errors == 0, "після завантаження поселення переживає зиму без помилок");
+
+    ctx.check(!load_game(balance, "not json", err) && !err.empty(), "битий файл — зрозуміла помилка");
+    ctx.check(!load_game(balance, "{\"format\": \"other\"}", err), "чужий JSON не приймається");
+    std::string broken = saved;
+    broken.replace(broken.find("\"objects\""), 9, "\"objectz\"");
+    ctx.check(!load_game(balance, broken, err) && err.find("пошкоджене") != std::string::npos,
+              "пошкоджене збереження не завантажується: " + err);
+}
+
+// ------------------------------------------------------------------ shared code, own code, rules
+
+void t_shared_code(Ctx& ctx) {
+    {
+        Opts o;
+        o.chars = 3;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        const int ostap = w.char_obj_id(0), marta = w.char_obj_id(1), bohdan = w.char_obj_id(2);
+        s.runtime().set_shared_code(R"PY(
+GREETING = "привіт зі спільного коду"
+
+def work():
+    notify("робота за замовчуванням")
+    me.rest(hours=1)
+
+def main():
+    while True:
+        work()
+)PY", false);
+        s.runtime().set_code(ostap, "");
+        s.runtime().set_code(marta, "def work():\n    notify(\"своя робота\")\n    me.rest(hours=1)\n");
+        s.runtime().set_code(bohdan, "notify(GREETING)\n");
+        s.run_until(at(1, 8, 30));
+        ctx.check(logs_of(w, ostap, "робота за замовчуванням").size() >= 2,
+                  "без власного коду персонаж живе за спільним розпорядком main()");
+        ctx.check(logs_of(w, marta, "своя робота").size() >= 2 && logs_of(w, marta, "за замовчуванням").empty(),
+                  "власне визначення work() має пріоритет над спільним");
+        ctx.check(logs_of(w, bohdan, "привіт зі спільного коду").size() == 1 &&
+                      logs_of(w, bohdan, "за замовчуванням").size() >= 2,
+                  "власний код бачить імена зі спільного, потім іде main()");
+        ctx.check(s.runtime().current_file(ostap) == CodeFile::Shared && s.runtime().current_file(marta) == CodeFile::Own,
+                  "рантайм знає, у якому коді зараз рядок");
+
+        s.runtime().set_shared_code(R"PY(
+GREETING = "привіт зі спільного коду"
+
+def work():
+    notify("нова спільна робота")
+    me.rest(hours=1)
+
+def main():
+    while True:
+        work()
+)PY");
+        const size_t marta_before = logs_of(w, marta, "своя робота").size();
+        s.run_until(at(1, 10, 30));
+        ctx.check(find_log(w, "Спільний код змінено").has_value(), "зміну спільного коду записано в журнал");
+        ctx.check(logs_of(w, ostap, "нова спільна робота").size() >= 1, "зміна спільного коду перезапустила всіх");
+        ctx.check(logs_of(w, marta, "нова спільна").empty() && logs_of(w, marta, "своя робота").size() > marta_before,
+                  "власне перевизначення лишилося в силі й після зміни спільного коду");
+        ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+    }
+    {
+        Opts o;
+        o.chars = 2;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        s.runtime().set_shared_code("def boom():\n    raise ValueError(\"бум\")\n", false);
+        s.runtime().set_code(w.char_obj_id(0), "notify(\"старт\")\nboom()\n");
+        s.run_until(at(1, 6));
+        auto err = find_log(w, "ValueError");
+        if (err) ctx.info(err->text);
+        ctx.check(err && err->text.find("(спільний код, рядок 2)") != std::string::npos,
+                  "помилку у функції спільного коду показано з рядком спільного коду");
+        s.runtime().set_shared_code("x = (\n");
+        auto syntax = find_log(w, "помилка в спільному коді");
+        ctx.check(syntax && syntax->text.find("спільний код, рядок 1") != std::string::npos,
+                  "синтаксична помилка в спільному коді — з рядком");
+        ctx.check(s.runtime().state(w.char_obj_id(1)) == AgentState::Crashed, "зі зламаним спільним кодом не стартує ніхто");
+    }
+}
+
+void t_rules(Ctx& ctx) {
+    {
+        Opts o;
+        o.chars = 3;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        const int ostap = w.char_obj_id(0), marta = w.char_obj_id(1), bohdan = w.char_obj_id(2);
+        s.runtime().set_shared_code(R"PY(
+@on(lambda: world.time >= time(22, 0) or world.time < time(6, 0))
+def night_sleep(me):
+    notify("ніч: сплю")
+    me.sleep(until=time(6, 0))
+
+@on(time(12, 0), priority=2)
+def lunch(me, event):
+    assert event.kind == Event.TIME
+    notify("обід")
+
+def main():
+    while True:
+        me.rest(hours=1)
+)PY", false);
+        s.runtime().set_code(ostap, "");
+        s.runtime().set_code(marta, "while True:\n    me.wait_until(world.time + minutes(30))\n");
+        s.runtime().set_code(bohdan, "assert off(night_sleep) == 1\n");
+        s.run_until(at(2, 8));
+        auto ostap_night = logs_of(w, ostap, "ніч: сплю");
+        auto marta_night = logs_of(w, marta, "ніч: сплю");
+        ctx.check(ostap_night.size() == 2 && marta_night.size() == 2,
+                  "нічне правило спрацювало на старті (05:30) і о 22:00 — і в main(), і у власному циклі персонажа");
+        ctx.check(marta_night.size() == 2 && marta_night[1].time >= at(1, 22) && marta_night[1].time < at(1, 22, 2),
+                  "правило-умова спрацьовує протягом хвилини");
+        ctx.check(logs_of(w, bohdan, "ніч: сплю").empty(), "off(night_sleep) відміняє правило для одного персонажа");
+        int lunches = 0;
+        for (int obj : {ostap, marta, bohdan})
+            for (const LogEntry& e : logs_of(w, obj, "обід")) lunches += e.time >= at(1, 12) && e.time < at(1, 12, 1);
+        ctx.check(lunches == 3, "@on(time(12, 0)) спрацювало в усіх рівно о 12:00");
+        ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+    }
+    {
+        Opts o;
+        o.chars = 2;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        s.runtime().set_code(w.char_obj_id(0), "@on(lambda: me.rest(hours=1))\ndef r(me):\n    pass\n\nme.rest(hours=2)\n");
+        s.runtime().set_code(w.char_obj_id(1),
+                             "def busy():\n    while True:\n        pass\n\n@on(lambda: busy())\ndef r(me):\n    pass\n\nme.rest(hours=2)\n");
+        s.run_until(at(1, 7));
+        ctx.check(find_log(w, "помилка в умові правила").has_value(), "дія в умові правила — зрозуміла помилка");
+        ctx.check(find_log(w, "умова правила виконує понад").has_value(), "нескінченна умова правила не вішає гру");
+        ctx.check(s.runtime().state(w.char_obj_id(0)) == AgentState::Crashed &&
+                      s.runtime().state(w.char_obj_id(1)) == AgentState::Crashed,
+                  "обидва коди зупинено з помилкою");
+    }
+}
+
+// The character's own code has priority over shared rules: its rules outrank shared ones of equal
+// priority, and a rule with the same function name replaces the shared one.
+void t_rule_priority(Ctx& ctx) {
+    Opts o;
+    o.chars = 5;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const int plain = w.char_obj_id(0), shift = w.char_obj_id(1), own_night = w.char_obj_id(2),
+              watch = w.char_obj_id(3), late = w.char_obj_id(4);
+    s.runtime().set_shared_code(R"PY(
+@on(lambda: world.time >= time(22, 0) or world.time < time(6, 0))
+def night_sleep(me):
+    notify("ніч: сплю")
+    me.sleep(until=time(6, 0))
+
+def main():
+    while True:
+        me.rest(hours=1)
+)PY", false);
+    s.runtime().set_code(plain, "");
+    s.runtime().set_code(shift, R"PY(
+@on(time(21, 0))
+def evening_shift(me):
+    notify("вечірня зміна")
+    me.wait_until(time(23, 0))
+)PY");
+    s.runtime().set_code(own_night, R"PY(
+@on(lambda: world.time >= time(23, 0) or world.time < time(6, 0))
+def night_sleep(me):
+    notify("моя ніч")
+    me.sleep(until=time(6, 0))
+)PY");
+    s.runtime().set_code(watch, R"PY(
+@on(time(21, 0))
+def night_watch(me):
+    notify("варта")
+    me.wait_until(time(7, 0))
+)PY");
+    s.runtime().set_code(late, R"PY(
+@on(time(23, 0))
+def late_check(me):
+    notify("пізня перевірка")
+)PY");
+    s.run_until(at(2, 8));
+
+    auto between = [&](int obj, const std::string& needle, double from, double to) {
+        int n = 0;
+        for (const LogEntry& e : logs_of(w, obj, needle)) n += e.time >= from && e.time < to;
+        return n;
+    };
+    ctx.check(between(plain, "ніч: сплю", at(1, 22), at(1, 22, 2)) == 1, "без власного коду — спати о 22:00");
+    ctx.check(between(shift, "вечірня зміна", at(1, 21), at(1, 21, 1)) == 1 &&
+                  between(shift, "ніч: сплю", at(1, 21), at(1, 23)) == 0 &&
+                  between(shift, "ніч: сплю", at(1, 23), at(1, 23, 2)) == 1,
+              "правило персонажа (зміна 21:00–23:00) має пріоритет: спільне нічне правило чекає до 23:00");
+    ctx.check(logs_of(w, own_night, "ніч: сплю").empty() && between(own_night, "моя ніч", at(1, 23), at(1, 23, 2)) == 1,
+              "правило з тим самим іменем у коді персонажа замінює спільне");
+    ctx.check(between(watch, "варта", at(1, 21), at(1, 21, 1)) == 1 &&
+                  between(watch, "ніч: сплю", at(1, 21), at(2, 8)) == 0,
+              "правило-умова, що дочекалося черги вже вдень, не спрацьовує (варта до 07:00 — без сну до 06:00)");
+    ctx.check(between(late, "ніч: сплю", at(1, 22), at(1, 22, 2)) == 1 &&
+                  between(late, "пізня перевірка", at(1, 23), at(1, 23, 1)) == 1,
+              "правило персонажа перериває спільне правило, що вже виконується");
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
 }

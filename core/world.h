@@ -247,6 +247,8 @@ public:
     std::function<void(const LogEntry&)> on_log;
 
 private:
+    friend struct SaveAccess;  // core/save.cpp
+
     int add_object(ObjKind kind, const std::string& name, Vec2 pos);
     double random01();
     void ensure_weather(double until);

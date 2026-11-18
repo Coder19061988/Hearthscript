@@ -21,7 +21,15 @@ enum class AgentState {
 };
 const char* agent_state_name(AgentState s);
 
+// Which part of a character's program is running: the settlement's shared code or the character's own code.
+enum class CodeFile { None, Shared, Own };
+
 // Executes player scripts: one pocketpy VM and one stackful coroutine (minicoro) per character.
+//
+// A character's program = the shared code (one for the whole settlement: functions, roles, rules,
+// main()) + the character's own code (runs after it in the same namespace, so its definitions win),
+// then main() from the shared code if it exists. @on rules registered by the shared code therefore
+// apply to everyone; a character turns one off with off(...) in its own code.
 //
 // Every game action called from Python (`me.chop_wood(...)`) runs inside the coroutine:
 // it advances the world in time slices and yields whenever the character's time budget for
@@ -35,9 +43,12 @@ public:
     ScriptRuntime(const ScriptRuntime&) = delete;
     ScriptRuntime& operator=(const ScriptRuntime&) = delete;
 
-    // Assigns code to a character. If code was already running, the current action is
-    // interrupted (its progress stays in the world) and the new code starts from the top.
+    // Assigns a character's own code. If the character was running, the current action is
+    // interrupted (its progress stays in the world) and the program starts from the top.
     void set_code(int char_obj, const std::string& source);
+    // Sets the shared code of the settlement; with `restart`, every living character starts again.
+    void set_shared_code(const std::string& source, bool restart = true);
+    const std::string& shared_code() const { return shared_source_; }
 
     // Queues an event (e.g. "RAIN") for every character whose code registered a handler for it.
     void post_event(const std::string& event);
@@ -52,8 +63,9 @@ public:
     static bool valid_global_name(const std::string& name);
 
     AgentState state(int char_obj) const;
-    int current_line(int char_obj) const;  // line of player code being executed (0 if unknown)
-    std::string source(int char_obj) const;  // code assigned with set_code ("" if none)
+    int current_line(int char_obj) const;       // line of player code being executed (0 if unknown)
+    CodeFile current_file(int char_obj) const;  // where that line is
+    std::string source(int char_obj) const;     // the character's own code ("" if none)
     World& world() { return world_; }
 
 private:
@@ -63,6 +75,9 @@ private:
     Agent* get_agent(int char_obj);
     void init_vm(Agent* a);
     void stop_agent(Agent* a);
+    void start_agent(Agent* a, bool log_restart);
+    bool check_rules(Agent* a);
+    bool eval_condition(Agent* a, int index, bool& value);
     void fiber_main(Agent* a);
     void on_think(Agent* a);
     [[noreturn]] void abandon(Agent* a, AgentState state);
@@ -72,6 +87,7 @@ private:
     void flush_print(Agent* a, bool force);
 
     World& world_;
+    std::string shared_source_;
     std::vector<std::unique_ptr<Agent>> agents_;
     Agent* current_ = nullptr;  // agent whose coroutine is running right now
 };

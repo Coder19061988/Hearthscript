@@ -1,10 +1,11 @@
 extends CanvasLayer
-## Interface (MVP §6): top bar with time, speed and the "Будувати" menu, event log, side panel with
-## the selected character's state and two tabs: the code editor and the player's global variables.
+## Interface (MVP §6): top bar with time, speed and the "Будувати" / "Гра" menus, event log, side panel with
+## the selected character's state and tabs: the character's own code, the shared code, global variables.
 ## The left area stays transparent: the 3D view is behind it.
 
 signal speed_selected(speed: float)
-signal code_applied(code: String, to_all: bool)
+signal code_applied(code: String)         # the selected character's own code
+signal shared_code_applied(code: String)  # the shared code of the settlement
 signal character_selected(id: int)
 signal restart_requested
 signal build_requested(kind: String)      # "house" / "storage" / "field": start choosing a place
@@ -12,10 +13,15 @@ signal blueprint_named(name: String)      # the name dialog was confirmed
 signal blueprint_cancelled
 signal global_set(name: String, text: String)
 signal global_removed(name: String)
+signal save_requested
+signal load_requested
+signal save_path_chosen(path: String)
+signal load_path_chosen(path: String)
 
-const PythonHighlighter := preload("res://scripts/python_highlighter.gd")
+const CodePane := preload("res://scripts/code_pane.gd")
 const HelpText := preload("res://scripts/help_text.gd")
 
+const SAVES_DIR := "user://saves"
 const PANEL_WIDTH := 560
 const LOG_HEIGHT := 200
 const LOG_LIMIT := 400
@@ -36,7 +42,6 @@ const LOG_COLORS := {
 	"info": "#d8d8d8", "notify": "#8fd0ff", "print": "#a8a8a8",
 	"warning": "#f0b45a", "error": "#ff6b6b", "death": "#ff8080",
 }
-const EXECUTING_LINE_COLOR := Color(0.95, 0.8, 0.2, 0.18)
 
 var _time_label: Label
 var _storage_label: Label
@@ -49,10 +54,8 @@ var _side: PanelContainer
 var _character_select: OptionButton
 var _character_ids: Array[int] = []
 var _info: RichTextLabel
-var _editor: CodeEdit
-var _dirty_label: Label
-var _apply_all: CheckBox
-var _expand_button: Button
+var _own_pane: CodePane
+var _shared_pane: CodePane
 var _globals_rows: VBoxContainer
 var _global_name: LineEdit
 var _global_value: LineEdit
@@ -60,14 +63,12 @@ var _help: AcceptDialog
 var _name_dialog: ConfirmationDialog
 var _name_edit: LineEdit
 var _name_caption: Label
+var _file_dialog: FileDialog
+var _file_dialog_saving := false
 var _fatal: Label
 
 var _selected := -1
-var _applied_code := ""  # code that is actually running for the selected character
 var _drafts := {}        # character id -> edited but not applied code
-var _executing_line := -1
-var _loading_editor := false
-var _scroll_to_line := false  # center the editor on the running line after selecting a character
 var _globals_shown := {}      # last globals put into the "Змінні" tab
 
 
@@ -134,6 +135,18 @@ func _ready() -> void:
 	_name_dialog.canceled.connect(func() -> void: blueprint_cancelled.emit())
 	root.add_child(_name_dialog)
 
+	_file_dialog = FileDialog.new()
+	_file_dialog.access = FileDialog.ACCESS_USERDATA
+	_file_dialog.use_native_dialog = false
+	_file_dialog.filters = PackedStringArray(["*.json ; Збереження Kindlescript"])
+	_file_dialog.size = Vector2i(760, 500)
+	_file_dialog.cancel_button_text = "Скасувати"
+	for option in ["favorites_enabled", "recent_list_enabled"]:  # editor-style side panels, if this Godot has them
+		if option in _file_dialog:
+			_file_dialog.set(option, false)
+	_file_dialog.file_selected.connect(_on_file_selected)
+	root.add_child(_file_dialog)
+
 	_fatal = Label.new()
 	_fatal.set_anchors_preset(Control.PRESET_CENTER)
 	_fatal.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -184,11 +197,17 @@ func _build_top_bar() -> Control:
 	_storage_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	row.add_child(_storage_label)
 
-	var restart := Button.new()
-	restart.text = "Почати знову"
-	restart.focus_mode = Control.FOCUS_NONE
-	restart.pressed.connect(func() -> void: restart_requested.emit())
-	row.add_child(restart)
+	var game := MenuButton.new()
+	game.text = "Гра ▾"
+	game.flat = false
+	game.focus_mode = Control.FOCUS_NONE
+	var game_menu := game.get_popup()
+	game_menu.add_item("Зберегти…")
+	game_menu.add_item("Завантажити…")
+	game_menu.add_separator()
+	game_menu.add_item("Почати знову")
+	game_menu.index_pressed.connect(_on_game_menu)
+	row.add_child(game)
 	var help := Button.new()
 	help.text = "Довідка (F1)"
 	help.focus_mode = Control.FOCUS_NONE
@@ -238,12 +257,25 @@ func _build_side_panel() -> PanelContainer:
 	_info.scroll_active = false
 	box.add_child(_info)
 
+	_own_pane = CodePane.new(
+		"Доповнює спільний код і має пріоритет: може перевизначити будь-що звідти, а off(правило) відміняє правило для цього персонажа.",
+		"# Код персонажа виконується після спільного.\n# Наприклад, щоб персонаж робив свою роботу:\n#\n# def work():\n#     ...")
+	_own_pane.applied.connect(func(code: String) -> void: code_applied.emit(code))
+	_own_pane.expand_toggled.connect(_toggle_expand)
+	_shared_pane = CodePane.new(
+		"Один на все поселення, виконується першим у кожного: функції, ролі, правила @on(...) і розпорядок main(). Застосування перезапускає всіх.",
+		"# Спільний код")
+	_shared_pane.applied.connect(func(code: String) -> void: shared_code_applied.emit(code))
+	_shared_pane.expand_toggled.connect(_toggle_expand)
+
 	var tabs := TabContainer.new()
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	tabs.add_child(_build_code_tab())
+	tabs.add_child(_own_pane)
+	tabs.add_child(_shared_pane)
 	tabs.add_child(_build_globals_tab())
 	tabs.set_tab_title(0, "Код персонажа")
-	tabs.set_tab_title(1, "Глобальні змінні")
+	tabs.set_tab_title(1, "Спільний код")
+	tabs.set_tab_title(2, "Глобальні змінні")
 	box.add_child(tabs)
 
 	var hint := Label.new()
@@ -252,57 +284,6 @@ func _build_side_panel() -> PanelContainer:
 	hint.add_theme_font_size_override("font_size", 12)
 	box.add_child(hint)
 	return panel
-
-
-func _build_code_tab() -> Control:
-	var box := VBoxContainer.new()
-	var header := HBoxContainer.new()
-	var code_caption := Label.new()
-	code_caption.text = "Python"
-	header.add_child(code_caption)
-	_dirty_label = Label.new()
-	_dirty_label.add_theme_color_override("font_color", Color(0.95, 0.7, 0.3))
-	_dirty_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_dirty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	header.add_child(_dirty_label)
-	box.add_child(header)
-
-	_editor = CodeEdit.new()
-	_editor.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_editor.gutters_draw_line_numbers = true
-	_editor.gutters_draw_executing_lines = true
-	_editor.indent_automatic = true
-	_editor.indent_use_spaces = true
-	_editor.indent_size = 4
-	_editor.auto_brace_completion_enabled = true
-	_editor.highlight_current_line = true
-	_editor.draw_tabs = true
-	_editor.syntax_highlighter = PythonHighlighter.create()
-	var font := SystemFont.new()
-	font.font_names = PackedStringArray(["Consolas", "Cascadia Mono", "DejaVu Sans Mono", "monospace"])
-	_editor.add_theme_font_override("font", font)
-	_editor.add_theme_font_size_override("font_size", 15)
-	_editor.text_changed.connect(_on_editor_changed)
-	_editor.gui_input.connect(_on_editor_input)
-	box.add_child(_editor)
-
-	var buttons := HBoxContainer.new()
-	_apply_all = CheckBox.new()
-	_apply_all.text = "Для всіх персонажів"
-	buttons.add_child(_apply_all)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	buttons.add_child(spacer)
-	_expand_button = Button.new()
-	_expand_button.text = "Розгорнути"
-	_expand_button.pressed.connect(_toggle_expand)
-	buttons.add_child(_expand_button)
-	var apply := Button.new()
-	apply.text = "Застосувати (Ctrl+Enter)"
-	apply.pressed.connect(_apply_code)
-	buttons.add_child(apply)
-	box.add_child(buttons)
-	return box
 
 
 func _build_globals_tab() -> Control:
@@ -351,24 +332,26 @@ func set_characters(characters: Array) -> void:
 
 
 func select_character(id: int, code: String) -> void:
-	if _selected >= 0 and _is_dirty():
-		_drafts[_selected] = _editor.text
+	if _selected >= 0 and _own_pane.is_dirty():
+		_drafts[_selected] = _own_pane.editor.text
 	_selected = id
 	var index := _character_ids.find(id)
 	if index >= 0:
 		_character_select.select(index)
-	_applied_code = code.replace(String.chr(13), "")  # CodeEdit stores LF line ends only
-	_set_editor_text(_drafts.get(id, _applied_code))
-	_scroll_to_line = true
+	_own_pane.load_code(code, _drafts.get(id))
 
 
-func mark_applied(code: String, to_all: bool) -> void:
-	_applied_code = code
-	if to_all:
-		_drafts.clear()
-	else:
-		_drafts.erase(_selected)
-	_update_dirty()
+func mark_applied(code: String) -> void:
+	_drafts.erase(_selected)
+	_own_pane.mark_applied(code)
+
+
+func set_shared_code(code: String) -> void:
+	_shared_pane.load_code(code)
+
+
+func mark_shared_applied(code: String) -> void:
+	_shared_pane.mark_applied(code)
 
 
 func clear_drafts() -> void:
@@ -391,6 +374,27 @@ func set_build_costs(costs: Dictionary) -> void:
 		var hours_text := ("%d" % int(hours)) if is_equal_approx(hours, roundf(hours)) else ("%.1f" % hours)
 		var text := "%s — %s%s год роботи" % [BUILD_NAMES[kind], "%d дров, " % wood if wood > 0 else "", hours_text]
 		popup.set_item_text(i, text)
+
+
+func ask_save_path(default_name: String) -> void:
+	DirAccess.make_dir_recursive_absolute(SAVES_DIR)
+	_file_dialog_saving = true
+	_file_dialog.title = "Зберегти гру"
+	_file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_file_dialog.ok_button_text = "Зберегти"
+	_file_dialog.current_dir = SAVES_DIR
+	_file_dialog.current_file = default_name
+	_file_dialog.popup_centered()
+
+
+func ask_load_path() -> void:
+	DirAccess.make_dir_recursive_absolute(SAVES_DIR)
+	_file_dialog_saving = false
+	_file_dialog.title = "Завантажити гру"
+	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_file_dialog.ok_button_text = "Завантажити"
+	_file_dialog.current_dir = SAVES_DIR
+	_file_dialog.popup_centered()
 
 
 ## A short instruction over the 3D view (empty text hides it).
@@ -454,13 +458,14 @@ func update_status(time_text: String, raining: bool, night: bool, winter: bool, 
 func update_character(c: Dictionary) -> void:
 	if c.is_empty():
 		_info.text = ""
-		_show_executing_line(-1)
+		_own_pane.show_executing_line(-1)
+		_shared_pane.show_executing_line(-1)
 		return
 	var lines := []
 	var state: String = c["state"]
 	var head := "[b]%s[/b] — код: %s" % [c["name"], c["state_text"]]
 	if state == "running" and c["line"] > 0:
-		head += ", рядок %d" % c["line"]
+		head += ", рядок %d%s" % [c["line"], " спільного коду" if c["line_file"] == "shared" else ""]
 	lines.append(head)
 	if not c["alive"]:
 		lines.append("[color=#ff8080]Смерть: %s[/color]" % c["death_cause"])
@@ -486,8 +491,9 @@ func update_character(c: Dictionary) -> void:
 			c["home"] if c["home"] != "" else "—", CLOTHES_NAMES.get(c["clothes"], "—"), TOOL_NAMES.get(c["tool"], "—")])
 		lines.append("Несе: %s" % (", ".join(carrying) if not carrying.is_empty() else "—"))
 	_info.text = "\n".join(lines)
-	# The marker only makes sense while the editor shows exactly the running code.
-	_show_executing_line(c["line"] - 1 if state == "running" and not _is_dirty() else -1)
+	var running_line: int = c["line"] - 1 if state == "running" else -1
+	_own_pane.show_executing_line(running_line if c["line_file"] == "own" else -1)
+	_shared_pane.show_executing_line(running_line if c["line_file"] == "shared" else -1)
 
 
 func add_log_entry(e: Dictionary) -> void:
@@ -541,6 +547,23 @@ func _format_value(value: Variant) -> String:
 	return str(value)
 
 
+func _on_game_menu(index: int) -> void:
+	match index:
+		0:
+			save_requested.emit()
+		1:
+			load_requested.emit()
+		3:
+			restart_requested.emit()
+
+
+func _on_file_selected(path: String) -> void:
+	if _file_dialog_saving:
+		save_path_chosen.emit(path)
+	else:
+		load_path_chosen.emit(path)
+
+
 func _add_global() -> void:
 	var name := _global_name.text.strip_edges()
 	if name == "":
@@ -550,57 +573,9 @@ func _add_global() -> void:
 	_global_value.text = ""
 
 
-func _is_dirty() -> bool:
-	return _editor.text != _applied_code
-
-
-func _set_editor_text(text: String) -> void:
-	_loading_editor = true
-	_editor.text = text
-	_editor.clear_undo_history()
-	_loading_editor = false
-	_executing_line = -1
-	_update_dirty()
-
-
-func _update_dirty() -> void:
-	_dirty_label.text = "● не застосовано" if _is_dirty() else ""
-
-
-func _on_editor_changed() -> void:
-	if not _loading_editor:
-		_update_dirty()
-
-
-func _on_editor_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ENTER and event.ctrl_pressed:
-		_apply_code()
-		_editor.accept_event()
-
-
-func _apply_code() -> void:
-	if _selected < 0:
-		return
-	code_applied.emit(_editor.text, _apply_all.button_pressed)
-
-
-func _show_executing_line(line: int) -> void:
-	if line == _executing_line:
-		return
-	if _executing_line >= 0 and _executing_line < _editor.get_line_count():
-		_editor.set_line_as_executing(_executing_line, false)
-		_editor.set_line_background_color(_executing_line, Color(0, 0, 0, 0))
-	_executing_line = line
-	if line >= 0 and line < _editor.get_line_count():
-		_editor.set_line_as_executing(line, true)
-		_editor.set_line_background_color(line, EXECUTING_LINE_COLOR)
-		if _scroll_to_line:
-			_editor.set_line_as_center_visible(line)
-			_scroll_to_line = false
-
-
 func _toggle_expand() -> void:
 	var expanded := _side.custom_minimum_size.x > PANEL_WIDTH
 	var full := int(_side.get_viewport().get_visible_rect().size.x * 0.92)
 	_side.custom_minimum_size.x = PANEL_WIDTH if expanded else full
-	_expand_button.text = "Розгорнути" if expanded else "Згорнути"
+	_own_pane.set_expanded(not expanded)
+	_shared_pane.set_expanded(not expanded)

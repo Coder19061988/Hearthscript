@@ -5,12 +5,14 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "proto.h"
+#include "save.h"
 
 using namespace kindle;
 
@@ -696,6 +698,10 @@ const TestCase kTests[] = {
     {"construction_rules", "MVP: правила будівництва, поле за кресленням", t_construction_rules},
     {"globals", "MVP: глобальні змінні гравця", t_globals},
     {"workplace_busy", "MVP: зайняті жорна (WorkplaceBusyError)", t_workplace_busy},
+    {"save_load", "MVP: збереження й завантаження гри", t_save_load},
+    {"shared_code", "спільний код + код персонажа (пріоритет) + main()", t_shared_code},
+    {"rules", "правила: @on(lambda: умова), @on(time(...)), off()", t_rules},
+    {"rule_priority", "правила коду персонажа мають пріоритет над спільними", t_rule_priority},
 };
 
 }  // namespace
