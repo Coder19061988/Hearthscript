@@ -53,6 +53,17 @@ const char* tool_broke_ua(const std::string& tool) {
 
 const char* species_ua(const std::string& species) { return species == "cow" ? "корова" : "курка"; }
 
+const char* skill_ua(const std::string& s) {
+    if (s == "woodcutting") return "рубка";
+    if (s == "farming") return "землеробство";
+    if (s == "husbandry") return "тваринництво";
+    if (s == "mining") return "видобуток";
+    if (s == "building") return "будівництво";
+    if (s == "crafting") return "ремесло";
+    if (s == "medicine") return "медицина";
+    return "?";
+}
+
 // Where a recipe is made, for messages: "будинок" or the workshop's name.
 std::string place_ua(const Balance& b, const std::string& at) {
     if (at == "house") return "будинок";
@@ -823,15 +834,58 @@ const Object* World::workshop_at(const Character& c, const std::string& type) co
     return nullptr;
 }
 
+bool is_skill(const std::string& skill) {
+    for (const char* s : kSkills)
+        if (skill == s) return true;
+    return false;
+}
+
+double World::skill_of(const Character& c, const std::string& skill) const {
+    auto it = c.skills.find(skill);
+    return it == c.skills.end() ? 0.0 : it->second;
+}
+
+double World::skill_factor(const Character& c, const std::string& skill) const {
+    return 1.0 + balance_.skill_speed_bonus * skill_of(c, skill) / 100.0;
+}
+
+int World::craft_quality(const Character& c) const {
+    const double s = skill_of(c, "crafting");
+    return 1 + (s >= balance_.tool_quality2_skill - kEps ? 1 : 0) + (s >= balance_.tool_quality3_skill - kEps ? 1 : 0);
+}
+
+bool World::has_mentor(const Character& c, const std::string& skill) const {
+    const double mine = skill_of(c, skill);
+    const Vec2 p = objects_[c.obj].pos;
+    for (const Character& o : chars_) {
+        if (&o == &c || !o.alive || o.practicing != skill || std::abs(o.practice_until - c.local_time) > 600.0) continue;
+        if (skill_of(o, skill) < mine + balance_.mentor_gap - kEps) continue;
+        const Vec2 q = objects_[o.obj].pos;
+        if (std::hypot(q.x - p.x, q.y - p.y) <= balance_.mentor_distance_m) return true;
+    }
+    return false;
+}
+
+void World::practice(Character& c, const std::string& skill, double seconds) {
+    if (seconds <= 0) return;
+    const Balance& b = balance_;
+    double& s = c.skills[skill];
+    double gain = b.skill_gain_per_hour * seconds / 3600.0 * (1.0 - s / 100.0);
+    if (has_mentor(c, skill)) gain *= b.mentor_factor;
+    s = std::min(100.0, s + gain);
+    c.practicing = skill;
+    c.practice_until = c.local_time;
+}
+
 const Object* World::hospital_at(const Character& c) const {
     for (const Object& o : objects_)
         if (o.kind == ObjKind::Workshop && o.workshop == "hospital" && o.built && at(c, o.pos)) return &o;
     return nullptr;
 }
 
-double World::work_factor(const Character& c, bool outdoors) const {
+double World::work_factor(const Character& c, bool outdoors, const std::string& skill) const {
     const Balance& b = balance_;
-    double f = 1.0;
+    double f = skill_factor(c, skill);
     if (outdoors && is_raining_at(c.local_time)) f *= b.rain_work_factor;
     if (c.fatigue >= b.fatigue_slow_threshold) f *= b.fatigue_slow_factor;
     if (c.illness_left > 0 && !c.illness_treated) f *= b.illness_work_factor;
@@ -870,6 +924,8 @@ void World::catch_ailments(Character& c, double hours, Activity a, double danger
         if (c.fatigue >= b.injury_fatigue_threshold) rate += b.injury_fatigue_per_hour;
         if (dark) rate += b.injury_dark_per_hour;
         if (c.hangover_until > c.local_time) rate += b.injury_hangover_per_hour;
+        if (!c.practicing.empty() && c.practice_until >= c.local_time - 600.0)  // the experienced get hurt less
+            rate *= 1.0 - b.skill_injury_reduction * skill_of(c, c.practicing) / 100.0;
         if (rate > 0 && chance(rate * hours)) {
             c.injury_left = b.injury_hours;
             c.injury_treated = false;
@@ -1723,6 +1779,14 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
             return fail("NoItemError", "Щоб лікувати " + quote(p.name) + ", потрібно в руках: " + need);
         }
         a.kind = ActionKind::Treat;
+    } else if (kind == "teach") {
+        if (!t || t->kind != ObjKind::Workshop || t->workshop != "school") return fail("ActionError", "Уроки проводять у школі");
+        if (unbuilt()) return fail_unbuilt();
+        if (!is_skill(p.item)) return fail("ActionError", "Невідома навичка " + quote(p.item));
+        if (skill_of(c, p.item) < b.teach_min_skill - kEps)
+            return fail("ActionError", quote(c.name) + " не може навчати: для уроку «" + skill_ua(p.item) + "» потрібна навичка від " +
+                                           fmt_num(b.teach_min_skill));
+        a.kind = ActionKind::Teach;
     } else if (kind == "bathe") {
         if (!t || t->kind != ObjKind::Workshop || t->workshop != "bathhouse") return fail("ActionError", "Митися можна в лазні");
         if (unbuilt()) return fail_unbuilt();
@@ -1898,6 +1962,26 @@ StepResult World::step_action_impl(Action& a, Character& c, double budget) {
             s.tools.erase(it);
             return done(used);
         }
+        case ActionKind::Teach: {
+            Object& school = objects_[a.target];
+            double used = walk(c, school.pos, budget);
+            if (!at(c, school.pos)) return running(used);
+            bool fin = false;
+            used += handle(c, a, b.teach_minutes * 60.0, budget - used, Activity::Light, fin);
+            if (!fin) return running(used);
+            const std::string& skill = a.params.item;
+            const double cap = skill_of(c, skill) * b.lesson_max_share;
+            int students = 0;
+            for (Character& p : chars_) {
+                if (&p == &c || !p.alive || !at(p, school.pos)) continue;
+                double& s = p.skills[skill];
+                if (s < cap) s = std::min(cap, s + b.lesson_gain);
+                ++students;
+            }
+            log(c.obj, LogKind::Info,
+                quote(c.name) + ": урок «" + skill_ua(skill) + "» у " + quote(school.name) + ", учнів " + std::to_string(students));
+            return done_int(used, students);
+        }
         case ActionKind::Bathe:
         case ActionKind::Drink: {
             Object& place = objects_[a.target];
@@ -1944,8 +2028,10 @@ StepResult World::step_action_impl(Action& a, Character& c, double budget) {
                     return failed(used, "ActionError", "Посадити не вдалося: немає саджанців чи місця", 0);
                 }
                 bool fin = false;
-                used += handle(c, a, b.plant_minutes * 60.0, std::min(budget - used, a.deadline - c.local_time),
-                               Activity::Heavy, fin);
+                const double t = handle(c, a, b.plant_minutes * 60.0, std::min(budget - used, a.deadline - c.local_time),
+                                        Activity::Heavy, fin);
+                used += t;
+                practice(c, "woodcutting", t);
                 if (!fin) return running(used);
                 a.progress = 0;
                 if (--it->second == 0) c.carrying.erase(it);
@@ -2021,7 +2107,10 @@ StepResult World::step_action_impl(Action& a, Character& c, double budget) {
                 return failed(used, "ActionError",
                               quote(p.name) + " не в лікарні: лікують лише в лікарні (хворий іде туди сам: me.go_to(лікарня))");
             bool fin = false;
-            used += handle(c, a, b.treat_minutes * 60.0, budget - used, Activity::Light, fin);
+            const double t = handle(c, a, b.treat_minutes * 60.0 / skill_factor(c, "medicine"), budget - used,
+                                    Activity::Light, fin);
+            used += t;
+            practice(c, "medicine", t);
             if (!fin) return running(used);
             std::string what;
             const int herbs = static_cast<int>(std::lround(b.treat_herbs));
@@ -2048,7 +2137,9 @@ StepResult World::step_action_impl(Action& a, Character& c, double budget) {
             double used = walk(c, field.pos, budget);
             if (!at(c, field.pos)) return running(used);
             bool fin = false;
-            used += handle(c, a, b.field_water_minutes * 60.0, budget - used, Activity::Heavy, fin);
+            const double t = handle(c, a, b.field_water_minutes * 60.0, budget - used, Activity::Heavy, fin);
+            used += t;
+            practice(c, "farming", t);
             if (!fin) return running(used);
             const int need = static_cast<int>(std::lround(b.field_water_units));
             auto it = c.carrying.find("water");
@@ -2412,7 +2503,9 @@ StepResult World::step_animal(Action& a, Character& c, double budget) {
         a.transferred = true;
     }
     bool fin = false;
-    used += handle(c, a, a.handle_total, budget - used, Activity::Light, fin);
+    const double t = handle(c, a, a.handle_total, budget - used, Activity::Light, fin);
+    used += t;
+    practice(c, "husbandry", t);
     if (!fin) return running(used);
     if (a.kind == ActionKind::Slaughter) {
         if (!animal.alive || animal.removed) return failed(used, "ActionError", "Тварина " + quote(animal.name) + " мертва");
@@ -2475,12 +2568,14 @@ StepResult World::step_gather(Action& a, Character& c, double budget) {
                           std::string("Руки повні: зібрано ") + std::to_string(a.done) + ", більше не піднести", a.done);
         }
 
-        const double factor = work_factor(c, true);
+        const char* skill = chop ? "woodcutting" : mow ? "husbandry" : mine ? "mining" : herbs ? "medicine" : "farming";
+        const double factor = work_factor(c, true, skill);
         double& partial = c.work_partial[src.id];
         double need = (1.0 - partial) * unit / factor;
         double t = std::min({left, a.deadline - c.local_time, need});
         pass_time(c, t, herbs ? Activity::Light : Activity::Heavy, mine ? b.injury_mine_per_hour : 0.0);
         used += t;
+        practice(c, skill, t);
         const bool broke = !herbs && wear_tool(c, t);
         if (t >= need - kEps) {
             partial = 0;
@@ -2549,21 +2644,24 @@ StepResult World::step_craft(Action& a, Character& c, double budget) {
                               "Руки повні: виготовлено " + std::to_string(a.done) + ", більше не піднести", a.done);
             }
         }
-        const double factor = work_factor(c, false);
+        const double factor = work_factor(c, false, "crafting");
         double t = std::min({left, a.deadline - c.local_time, (unit - a.progress) / factor});
         pass_time(c, t, r.heavy ? Activity::Heavy : Activity::Light, r.workplace == "forge" ? balance_.injury_forge_per_hour : 0.0);
         used += t;
         a.progress += t * factor;
+        practice(c, "crafting", t);
         if (a.progress >= unit - kEps) {
             a.progress = 0;
             for (const auto& [res, n] : r.inputs) {
                 auto it = c.carrying.find(res);
                 if ((it->second -= n) == 0) c.carrying.erase(it);
             }
-            if (tool)
+            if (tool) {
                 c.tool = make_tool(a.params.item);
-            else
+                c.tool.quality = craft_quality(c);  // a skilled smith forges tools that wear slower
+            } else {
                 c.carrying[a.params.item] += 1;
+            }
             a.done += 1;
         }
     }
@@ -2596,10 +2694,11 @@ StepResult World::step_sow(Action& a, Character& c, double budget) {
             field.seeded = true;
             field.crop = crop;
         }
-        const double factor = work_factor(c, true);
+        const double factor = work_factor(c, true, "farming");
         double t = std::min({left, a.deadline - c.local_time, (total - field.sow_done) / factor});
         pass_time(c, t, Activity::Heavy);
         used += t;
+        practice(c, "farming", t);
         field.sow_done += t * factor;
         if (field.sow_done >= total - kEps) {
             field.field_state = FieldState::Sown;
@@ -2627,10 +2726,11 @@ StepResult World::step_build(Action& a, Character& c, double budget) {
             used += walk(c, site.pos, std::min(left, a.deadline - c.local_time));
             continue;
         }
-        const double factor = work_factor(c, true);
+        const double factor = work_factor(c, true, "building");
         double t = std::min({left, a.deadline - c.local_time, (site.build_total - site.build_done) / factor});
         pass_time(c, t, Activity::Heavy);
         used += t;
+        practice(c, "building", t);
         site.build_done += t * factor;
         if (site.build_done >= site.build_total - kEps) {
             complete_building(site, c.obj);

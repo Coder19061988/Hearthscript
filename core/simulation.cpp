@@ -29,10 +29,19 @@ void build_start_scene(World& world, const StartScene& scene) {
     world.add_deposit("Кар'єр_1", {-170, -60}, "stone", static_cast<int>(std::lround(b.quarry_stone)));
     world.add_deposit("Рудня_1", {-250, 40}, "ore", static_cast<int>(std::lround(b.mine_ore)));  // hay for animals; animals themselves are bought (trade)
     world.add_town_hall("Управа_1", {40, -90});  // the settlement's coins; the trading post is built by the player
+    // Everyone starts knowing a craft or two (the first four match the reference settlement's roles).
+    static const char* const kStartSkills[][2] = {
+        {"woodcutting", "building"}, {"farming", "medicine"}, {"woodcutting", "mining"}, {"crafting", "husbandry"},
+        {"building", "farming"},     {"medicine", "crafting"}, {"mining", "woodcutting"}, {"husbandry", "farming"},
+        {"crafting", "building"},    {"farming", "husbandry"}};
     for (int i = 0; i < scene.characters; ++i) {
         std::string name = kNames[i % kNameCount];
         if (i >= kNameCount) name += "_" + std::to_string(i / kNameCount + 1);
-        world.add_character(name, house, {60, 0}, scene.hunger, scene.fatigue, scene.health);
+        const int id = world.add_character(name, house, {60, 0}, scene.hunger, scene.fatigue, scene.health);
+        Character& c = world.character(id);
+        const auto& skills = kStartSkills[i % (sizeof(kStartSkills) / sizeof(kStartSkills[0]))];
+        c.skills[skills[0]] = b.start_skill_main;
+        c.skills[skills[1]] = b.start_skill_second;
     }
     world.set_start_time(scene.start_time);
     world.init_knowledge();  // everyone starts at home: knows the house and the housemates, nothing else

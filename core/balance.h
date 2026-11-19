@@ -351,6 +351,22 @@ struct Balance {
     double tavern_rest_mood_per_hour = 2.0;  // extra mood while resting at a tavern (company)
     double value_beer = 5.0;
 
+    // Skills: grow with practice (faster next to a mentor) and at school; speed, tool quality, fewer injuries
+    double skill_gain_per_hour = 1.0;  // skill per hour of practice at 0 (slower as it grows: × (1 - skill/100))
+    double skill_speed_bonus = 0.5;  // a master (100) works this much faster
+    double skill_injury_reduction = 0.5;  // a master gets injured this much less often
+    double mentor_gap = 20.0;  // a mentor is at least this much better at the same work
+    double mentor_factor = 2.0;  // practice next to a mentor teaches this much faster
+    double mentor_distance_m = 10.0;
+    double tool_quality2_skill = 40.0;  // crafting skill for tools of quality 2
+    double tool_quality3_skill = 75.0;  // ... of quality 3
+    double teach_min_skill = 40.0;  // a teacher needs at least this skill
+    double teach_minutes = 120.0;  // a lesson at the school
+    double lesson_gain = 5.0;  // skill for every student at the school when the lesson ends
+    double lesson_max_share = 0.8;  // lessons teach up to this share of the teacher's skill
+    double start_skill_main = 35.0;  // every character starts with one craft at this
+    double start_skill_second = 20.0;  // ... and a second one at this
+
     // Notice board (limited knowledge: characters share what they saw)
     double board_build_wood = 5.0;
     double board_build_hours = 1.0;

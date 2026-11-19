@@ -19,7 +19,8 @@ const WORKSHOP_SIZE := Vector3(5.0, 3.0, 4.5)
 const WORKSHOP_COLORS := {"smithy": Color(0.42, 0.4, 0.4), "tailor": Color(0.75, 0.62, 0.7),
 	"sawmill": Color(0.62, 0.48, 0.3), "carpentry": Color(0.7, 0.55, 0.35), "kiln": Color(0.5, 0.36, 0.3),
 	"hospital": Color(0.88, 0.86, 0.8), "church": Color(0.92, 0.9, 0.84),
-	"bathhouse": Color(0.5, 0.42, 0.35), "brewery": Color(0.65, 0.5, 0.3), "tavern": Color(0.7, 0.45, 0.3)}
+	"bathhouse": Color(0.5, 0.42, 0.35), "brewery": Color(0.65, 0.5, 0.3), "tavern": Color(0.7, 0.45, 0.3),
+	"school": Color(0.8, 0.72, 0.5)}
 const CRAFT_SHORT := {"flour": "меле", "bread": "пече", "axe": "кує", "sickle": "кує", "scythe": "кує",
 	"cloth": "тче", "clothes": "шиє", "warm_clothes": "шиє", "planks": "пиляє", "bed": "столярує",
 	"charcoal": "палить", "iron": "плавить", "pickaxe": "кує", "water": "набирає воду",
@@ -56,7 +57,7 @@ const ACTION_SHORT := {
 	"post": "пише на дошці", "read": "читає дошку",
 	"mine": "добуває", "water": "поливає", "gather_herbs": "збирає трави", "treat": "лікує",
 	"hold_service": "править службу", "bury": "ховає", "light": "запалює ліхтар", "plant": "садить",
-	"bathe": "миється", "drink": "п'є пиво", "mow": "косить", "feed": "годує", "milk": "доїть", "collect_eggs": "збирає яйця", "slaughter": "забиває",
+	"bathe": "миється", "drink": "п'є пиво", "teach": "навчає", "mow": "косить", "feed": "годує", "milk": "доїть", "collect_eggs": "збирає яйця", "slaughter": "забиває",
 	"order": "замовляє", "dismantle": "розбирає"}
 const CARGO_COLORS := {"wood": Color(0.62, 0.42, 0.22), "grain": Color(0.9, 0.78, 0.4),
 	"flour": Color(0.95, 0.93, 0.85), "bread": Color(0.75, 0.5, 0.25), "hay": Color(0.8, 0.75, 0.35),

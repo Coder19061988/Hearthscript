@@ -299,6 +299,21 @@
   "tavern_rest_mood_per_hour": 2,
   "value_beer": 5,
 
+  "skill_gain_per_hour": 1,
+  "skill_speed_bonus": 0.5,
+  "skill_injury_reduction": 0.5,
+  "mentor_gap": 20,
+  "mentor_factor": 2,
+  "mentor_distance_m": 10,
+  "tool_quality2_skill": 40,
+  "tool_quality3_skill": 75,
+  "teach_min_skill": 40,
+  "teach_minutes": 120,
+  "lesson_gain": 5,
+  "lesson_max_share": 0.8,
+  "start_skill_main": 35,
+  "start_skill_second": 20,
+
   "board_build_wood": 5,
   "board_build_hours": 1,
   "board_post_minutes_per_note": 1,
@@ -320,7 +335,8 @@
     "nursery": {"name": "Лісорозсадник", "materials": {"wood": 10}, "hours": 4},
     "bathhouse": {"name": "Лазня", "materials": {"wood": 30, "stone": 10}, "hours": 10, "stove": true},
     "brewery": {"name": "Пивоварня", "materials": {"wood": 25}, "hours": 8},
-    "tavern": {"name": "Корчма", "materials": {"wood": 40}, "hours": 12, "stove": true}
+    "tavern": {"name": "Корчма", "materials": {"wood": 40}, "hours": 12, "stove": true},
+    "school": {"name": "Школа", "materials": {"wood": 40}, "hours": 12, "stove": true}
   },
 
   "recipes": {

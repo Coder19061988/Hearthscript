@@ -31,7 +31,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Їжа (розділ 26): псування на складах (`World::spoil`, частка запасу за добу; `Object::spoil` — дробовий залишок, `spoiled` — для щоденного запису), погріб (склад з `cellar`), коптильня, сироварня, раціон (`Character::ate`, `World::diet`).
 - Лісорозсадник (розділ 27): саджанці (рецепт без матеріалів), `me.plant`, `Object::saplings` ростуть у теплу пору й додають `trees_total`; ліс не більший за `capacity` (`World::forest_room`).
 - Лазня, пивоварня, корчма (розділ 28): майстерні з піччю (`HeatedWorkshop` у прелюдії), `me.bathe`, `me.drink`; чистота (`clean_until`) і похмілля (`hangover_until`) враховують `catch_ailments` і `work_factor`; відпочинок у корчмі — `workshop_at(c, "tavern")`.
-- Ще немає: решти майстерень і ланцюжків з «Плану гри», заразних хвороб і решти розділів MVP §8 (свята, сім'ї й міграція, загрози).
+- Навички й школа (розділ 29): `Character::skills` (7 навичок), `World::practice` у кроках дій (наставник — `has_mentor`), `work_factor(c, outdoors, skill)`, якість інструментів — `craft_quality`; школа й `me.teach`. Стартові навички — у `build_start_scene`.
+- Ще немає: решти майстерень і ланцюжків з «Плану гри», заразних хвороб, дітей, досліджень і бібліотеки, решти розділів MVP §8 (свята, сім'ї й міграція, загрози).
 
 **Без сумісності зі старим.** Гра нова й ще не випущена. Не підтримуй збереження з попередніх версій коду, старі назви API чи старий формат даних. Змінюй формат і API прямо й онови тести та документи. Запасні гілки «для старих файлів» і обгортки для старого API не потрібні: код має лишатися чистим.
 
@@ -56,7 +57,7 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
 ```
 
 - **Скріншоти.** Інструмент `screenshot.gd` рендерить сцену у вікні й зберігає PNG; так можна перевірити візуальні зміни без редактора.
-- **Новий сценарний тест:** додай функцію та рядок у `kTests` у [proto/tests.cpp](proto/tests.cpp), а назву — у `KINDLE_TESTS` у [CMakeLists.txt](CMakeLists.txt). Випадковість (хвороби, травми) тест робить певною власним балансом: `Balance b = default_balance(); b.illness_cold_per_hour = 100; ctx.sim(o, &b)`.
+- **Новий сценарний тест:** додай функцію та рядок у `kTests` у [proto/tests.cpp](proto/tests.cpp), а назву — у `KINDLE_TESTS` у [CMakeLists.txt](CMakeLists.txt). Випадковість (хвороби, травми) тест робить певною власним балансом: `Balance b = default_balance(); b.illness_cold_per_hour = 100; ctx.sim(o, &b)`. Персонажі в тестах стартують без навичок (`Opts::skills = false`, у `mvp_opts()` — з навичками, як у грі).
 - **Прелюдія:** [core/prelude.py](core/prelude.py) вшивається в бінарник, тож після змін у ній потрібна перезбірка.
 - **Баланс:** [config/balance.json](config/balance.json) читається під час запуску. Новий параметр додавай у трьох місцях: поле в `Balance` ([core/balance.h](core/balance.h)), запис у `kFields` ([core/balance.cpp](core/balance.cpp)) і ключ у JSON. Рецепти майстерень — розділ `"recipes"` того самого файлу (`Balance::recipes`, без значень у коді): нове виробництво — це рецепт і, за потреби, будівля.
 - **Дані для Godot:** `config/balance.json`, `scripts/woodcutter.py` і `scripts/start_shared.py` (стає `godot/data/shared.py`) копіюються в `godot/data/` під час збірки (ціль `kindle_godot_data`). Редагуй оригінали, а не копії.

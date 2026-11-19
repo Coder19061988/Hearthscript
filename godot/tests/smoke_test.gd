@@ -265,6 +265,8 @@ func _check_hospital() -> Array:
 	for b in sim.get_buildings():
 		if b["name"] == "Погріб_1" and (not b["cellar"] or not _main.world_view._buildings.has(b["id"])):
 			problems.append("погріб не показано")
+	if not _main.ui._info.text.contains("Навички"):
+		problems.append("панель персонажа не показує навичок")
 	if not _main.ui._info.text.contains("Раціон"):
 		problems.append("панель персонажа не показує раціон")
 	if not _main.ui._info.text.contains("Настрій"):

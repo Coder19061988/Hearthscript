@@ -292,7 +292,7 @@ struct SaveAccess {
                 {"illness_treated", c.illness_treated}, {"injury_treated", c.injury_treated},
                 {"mood", c.mood}, {"buried", c.buried}, {"mood_warned", c.mood_warned}, {"torch_left", c.torch_left}, {"ate", c.ate},
                 {"clean_until", c.clean_until}, {"last_bath", c.last_bath}, {"hangover_until", c.hangover_until},
-                {"drink_day", c.drink_day}, {"beers", c.beers},
+                {"drink_day", c.drink_day}, {"beers", c.beers}, {"skills", c.skills},
                 {"last_action_time", c.last_action_time}, {"work_partial", partial},
                 {"idle_warned", c.idle_warned}, {"hunger_warned", c.hunger_warned},
                 {"fatigue_warned", c.fatigue_warned}, {"cold_warned", c.cold_warned},
@@ -391,6 +391,7 @@ struct SaveAccess {
             c.hangover_until = cj.at("hangover_until").get<double>();
             c.drink_day = cj.at("drink_day").get<int>();
             c.beers = cj.at("beers").get<int>();
+            c.skills = cj.at("skills").get<std::map<std::string, double>>();
             c.carrying = counts_from(cj.at("carrying"));
             c.home = cj.at("home").get<int>();
             if (c.home >= static_cast<int>(w.objects_.size()) || (c.home >= 0 && w.objects_[c.home].kind != ObjKind::House))

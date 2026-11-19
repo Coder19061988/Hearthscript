@@ -330,6 +330,17 @@ struct RuntimeNatives {
         py_assign(py_retval(), py_r0());
         return true;
     }
+    // Skills are public: everyone in a village knows who is good at what.
+    static bool char_skill(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Person, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        const std::string skill = py_tostr(py_arg(1));
+        if (!is_skill(skill)) return ValueError("невідома навичка '%s'", skill.c_str());
+        py_newfloat(py_retval(), world().skill_of(world().character(o->id), skill));
+        return true;
+    }
     static bool self_state(int argc, py_StackRef argv) {
         PY_CHECK_ARGC(1);
         PY_CHECK_ARG_TYPE(0, tp_str);
@@ -1072,6 +1083,7 @@ void ScriptRuntime::init_vm(Agent* a) {
     py_bindfunc(kn, "self_in_dark", RuntimeNatives::self_in_dark);
     py_bindfunc(kn, "self_diet", RuntimeNatives::self_diet);
     py_bindfunc(kn, "self_state", RuntimeNatives::self_state);
+    py_bindfunc(kn, "char_skill", RuntimeNatives::char_skill);
     py_bindfunc(kn, "forest_info", RuntimeNatives::forest_info);
     py_bindfunc(kn, "field_info", RuntimeNatives::field_info);
     py_bindfunc(kn, "building_info", RuntimeNatives::building_info);

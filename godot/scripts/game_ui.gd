@@ -48,7 +48,7 @@ const ACTION_NAMES := {
 	"post": "пише на дошці оголошень", "read": "читає дошку оголошень",
 	"mine": "добуває", "water": "поливає поле", "gather_herbs": "збирає трави", "treat": "лікує",
 	"hold_service": "править службу", "bury": "ховає померлого", "light": "запалює ліхтар", "plant": "садить дерева",
-	"bathe": "миється в лазні", "drink": "п'є пиво", "mow": "косить сіно", "feed": "годує тварину", "milk": "доїть корову", "collect_eggs": "збирає яйця",
+	"bathe": "миється в лазні", "drink": "п'є пиво", "teach": "навчає", "mow": "косить сіно", "feed": "годує тварину", "milk": "доїть корову", "collect_eggs": "збирає яйця",
 	"slaughter": "забиває тварину", "order": "залишає замовлення купцю", "dismantle": "розбирає інструмент"}
 const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "зерно", "flour": "борошно",
 	"hay": "сіно", "milk": "молоко", "eggs": "яйця", "meat": "м'ясо", "clothes": "звичайний одяг",
@@ -56,6 +56,8 @@ const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "з
 	"planks": "дошки", "bed": "ліжко", "stone": "камінь", "ore": "руда", "charcoal": "вугілля", "iron": "залізо",
 	"water": "вода", "herbs": "трави", "bandage": "бинти", "oil": "олія", "torch": "смолоскипи",
 	"smoked_meat": "копчене м'ясо", "cheese": "сир", "sapling": "саджанці", "beer": "пиво"}
+const SKILL_NAMES := {"woodcutting": "рубка", "farming": "землеробство", "husbandry": "тваринництво",
+	"mining": "видобуток", "building": "будівництво", "crafting": "ремесло", "medicine": "медицина"}
 const TOOL_NAMES := {"axe": "сокира", "sickle": "серп", "scythe": "коса", "pickaxe": "кайло"}
 const CLOTHES_NAMES := {"clothes": "звичайний", "warm_clothes": "теплий"}
 const LOG_COLORS := {
@@ -590,6 +592,7 @@ func update_character(c: Dictionary, knowledge: Array = []) -> void:
 		for food in c["diet"]:
 			diet.append(RESOURCE_NAMES.get(food, food))
 		lines.append("Раціон за тиждень: %s" % (", ".join(diet) if not diet.is_empty() else "—"))
+		lines.append("Навички: %s" % _skills_text(c["skills"]))
 		var ailments := _ailments_text(c)
 		if ailments != "":
 			lines.append(ailments)
@@ -694,6 +697,16 @@ func _hours_text(hours: float) -> String:
 	return "%d дн. %d год" % [h / 24, h % 24] if h >= 24 else "%d год" % h
 
 
+## Skills from the best, the ones not learned yet left out.
+func _skills_text(skills: Dictionary) -> String:
+	var names := skills.keys().filter(func(s): return skills[s] >= 1.0)
+	names.sort_custom(func(x, y): return skills[x] > skills[y])
+	var parts := []
+	for s in names:
+		parts.append("%s %d" % [SKILL_NAMES.get(s, s), int(skills[s])])
+	return " · ".join(parts) if not parts.is_empty() else "—"
+
+
 func _clothes_text(c: Dictionary) -> String:
 	var clothes: String = c["clothes"]
 	if clothes == "":
@@ -710,7 +723,8 @@ func _tool_text(c: Dictionary) -> String:
 	var condition: float = c["tool_condition"]
 	if condition <= 0.0:
 		return "[color=#ff7070]%s (зламаний)[/color]" % TOOL_NAMES.get(tool, tool)
-	var text := "%s %d%%" % [TOOL_NAMES.get(tool, tool), int(ceil(condition))]
+	var quality: int = c["tool_quality"]
+	var text := "%s%s %d%%" % [TOOL_NAMES.get(tool, tool), " (якість %d)" % quality if quality > 1 else "", int(ceil(condition))]
 	return "[color=#f0b45a]%s[/color]" % text if condition < 25.0 else text
 
 

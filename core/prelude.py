@@ -704,6 +704,14 @@ class Tavern(HeatedWorkshop):
     _kind = "tavern"
 
 
+class School(HeatedWorkshop):
+    """Школа: вчитель із навичкою від 40 проводить урок (me.teach) — усі в школі наприкінці вчаться."""
+    _kind = "school"
+
+
+SKILLS = ("woodcutting", "farming", "husbandry", "mining", "building", "crafting", "medicine")
+
+
 class TradingPost(Storage):
     """Торговий пост: amount() і has_tool() — що лишив купець (куплене);
     for_sale — що чекає на продаж; orders — замовлення на наступний візит."""
@@ -904,6 +912,15 @@ class Person(GameObject):
     def warmth(self):
         return _kn.char_stat(self._id, "warmth")
 
+    def skill(self, name):
+        """Навичка 0…100: "woodcutting", "farming", "husbandry", "mining", "building", "crafting", "medicine"."""
+        return _kn.char_skill(self._id, name)
+
+    @property
+    def skills(self):
+        """Усі навички: {"woodcutting": 35.0, ...}. Хто що вміє, знають усі."""
+        return {name: _kn.char_skill(self._id, name) for name in SKILLS}
+
     @property
     def mood(self):
         """Настрій 0…100: нижче 30 праця повільніша. Падає від роботи, голоду, холоду; росте від відпочинку й служб."""
@@ -958,10 +975,11 @@ _CLASSES = {"storage": Storage, "house": House, "forest": Forest, "field": Field
             "sawmill": Sawmill, "carpentry": Carpentry, "kiln": Kiln, "well": Well, "hospital": Hospital,
             "church": Church, "oil_press": OilPress, "deposit": Deposit, "lantern": Lantern,
             "cellar": Cellar, "smokehouse": Smokehouse, "dairy": Dairy, "nursery": Nursery,
-            "bathhouse": Bathhouse, "brewery": Brewery, "tavern": Tavern}
+            "bathhouse": Bathhouse, "brewery": Brewery, "tavern": Tavern, "school": School}
 _BUILDING_TYPES = (Storage, House, Forest, Field, Board, Barn, Meadow, TownHall, TradingPost, Workshop, Smithy, Tailor, Sawmill, Carpentry, Kiln,
                    Well, Hospital, Church, OilPress, Deposit, Lantern,
-                   Cellar, Smokehouse, Dairy, Nursery, HeatedWorkshop, Bathhouse, Brewery, Tavern)
+                   Cellar, Smokehouse, Dairy, Nursery, HeatedWorkshop, Bathhouse, Brewery, Tavern,
+                   School)
 
 
 def _item_key(item):
@@ -1201,6 +1219,12 @@ class Me(Person):
     def gather_herbs(self, meadow, amount=None, until=None, hours=None):
         """Збирати лікарські трави на лузі (30 хв на одиницю), лише в теплу пору. Без обмежень — до повних рук."""
         return _kn.act("gather_herbs", _id_of(meadow, Meadow, "gather_herbs"), _limits(amount, until, hours))
+
+    def teach(self, school, skill):
+        """Провести урок у школі (2 год): усі, хто наприкінці в школі, +5 до навички skill (не вище 80% від вчителя)."""
+        if skill not in SKILLS:
+            raise ValueError(f"teach(): невідома навичка {skill!r}; є {', '.join(SKILLS)}")
+        return _kn.act("teach", _id_of(school, School, "teach"), {"item": skill})
 
     def bathe(self, bathhouse):
         """Помитися в натопленій лазні (2 відра води з рук, 1 год): −30 втоми, +10 настрою, 2 доби хворіти вдвічі рідше. Раз на добу."""
@@ -1466,7 +1490,7 @@ __all__ = [
     "WorkplaceBusyError", "ToolBrokenError", "Building",
     "Tool", "Axe", "Sickle", "Scythe", "Pickaxe", "Clothes", "WarmClothes", "Deposit",
     "GameObject", "Storage", "House", "Forest", "Field", "Board", "Barn", "Meadow", "Person", "Me", "me",
-    "TownHall", "TradingPost", "merchant", "Workshop", "Smithy", "Tailor", "Sawmill", "Carpentry", "Kiln", "Well", "Hospital", "Church", "OilPress", "Lantern", "Cellar", "Smokehouse", "Dairy", "Nursery", "HeatedWorkshop", "Bathhouse", "Brewery", "Tavern",
+    "TownHall", "TradingPost", "merchant", "Workshop", "Smithy", "Tailor", "Sawmill", "Carpentry", "Kiln", "Well", "Hospital", "Church", "OilPress", "Lantern", "Cellar", "Smokehouse", "Dairy", "Nursery", "HeatedWorkshop", "Bathhouse", "Brewery", "Tavern", "School", "SKILLS",
     "Animal", "Cow", "Chicken",
     "get", "buildings", "animals", "tools", "bodies", "notify", "on", "off",
 ]

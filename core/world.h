@@ -75,6 +75,10 @@ inline std::map<std::string, int> garment_counts(const std::vector<Garment>& gar
     return n;
 }
 
+// Skills: one per kind of work, 0..100 (Python names).
+inline const char* const kSkills[] = {"woodcutting", "farming", "husbandry", "mining", "building", "crafting", "medicine"};
+bool is_skill(const std::string& skill);
+
 // Every named thing in the world. Kind-specific fields are unused for other kinds.
 // Clothes are identified by strings: "clothes", "warm_clothes".
 struct Object {
@@ -198,6 +202,9 @@ struct Character {
     double last_bath = -1;
     double hangover_until = 0;  // too much beer: slower work, more injuries
     int drink_day = -1, beers = 0;  // mugs drunk on that day
+    std::map<std::string, double> skills;  // skill -> 0..100 (missing = 0)
+    std::string practicing;     // the skill of the work being done (a mentor's presence is checked by it; not saved)
+    double practice_until = -1;
     int home = -1;  // house object id
     // Absolute game time this character has been simulated up to. Within a tick
     // every character advances independently; Simulation::tick() syncs them.
@@ -262,7 +269,7 @@ enum class ActionKind {
     Deliver, Build, MoveInto,
     Post, Read,
     Mow, Feed, Milk, CollectEggs, Slaughter, Mine, Water, GatherHerbs, Treat, HoldService, Bury, Light, Plant,
-    Bathe, Drink,
+    Bathe, Drink, Teach,
     Order,
     Dismantle,
 };
@@ -366,6 +373,9 @@ public:
     const Object* hospital_at(const Character& c) const;  // the hospital the character stands at
     const Object* nearest_church(Vec2 from) const;          // a built one; nullptr if there is none
     const Object* workshop_at(const Character& c, const std::string& type) const;  // a built one the character stands at
+    double skill_of(const Character& c, const std::string& skill) const;
+    double skill_factor(const Character& c, const std::string& skill) const;  // work speed: 1 .. 1 + skill_speed_bonus
+    int craft_quality(const Character& c) const;  // quality of a tool this character forges
     bool is_body(const Object& o) const;  // a dead person or animal not buried yet
     bool lit_near(const Character& c) const;  // daylight, or a lit lantern within lantern_radius_m
     double spoil_per_day(const std::string& food) const;  // share of a stock spoiling a day (warm season, no cellar)
@@ -433,7 +443,10 @@ private:
     double fatigue_rate(Activity a) const;
     const Object* house_at(const Character& c) const;
     const Object* shelter_at(const Character& c) const;  // a house or a hospital: warm inside, dry in the rain
-    double work_factor(const Character& c, bool outdoors) const;  // rain, fatigue, illness, injury
+    // Rain (outdoors), fatigue, illness, injury, mood, hangover — and the skill of this work.
+    double work_factor(const Character& c, bool outdoors, const std::string& skill) const;
+    void practice(Character& c, const std::string& skill, double seconds);  // skill grows; a mentor nearby doubles it
+    bool has_mentor(const Character& c, const std::string& skill) const;
     void catch_ailments(Character& c, double hours, Activity a, double danger);
     bool works_in_dark(Character& c, double hours, Activity a);
     void spoil(Object& storage, double t, double dt);  // heavy work at night without light (burns a torch)

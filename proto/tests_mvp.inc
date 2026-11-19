@@ -1572,6 +1572,95 @@ notify("корчма")
     ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
 }
 
+// Skills: grow with practice (twice as fast next to a mentor), speed the work up, a skilled smith forges better
+// tools; a teacher's lesson at the school teaches everyone there. The real game starts with skills.
+void t_skills(Ctx& ctx) {
+    {
+        Opts o = mvp_opts();
+        o.random_rain = false;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        const Balance& b = w.balance();
+        ctx.check(w.skill_of(w.character(w.char_obj_id(0)), "woodcutting") == b.start_skill_main &&
+                      w.skill_of(w.character(w.char_obj_id(1)), "farming") == b.start_skill_main &&
+                      w.skill_of(w.character(w.char_obj_id(3)), "crafting") == b.start_skill_main,
+                  "на старті кожен уміє своє: лісоруб — рубку, фермерка — землеробство, пекарка — ремесло");
+    }
+    Opts o;
+    o.chars = 4;
+    o.axes = 3;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_forest("Ліс_2", {300, 300}, 50);
+    Character& master = w.character(w.char_obj_id(0));
+    Character& apprentice = w.character(w.char_obj_id(1));  // next to the master
+    Character& alone = w.character(w.char_obj_id(2));       // in another forest
+    master.skills["woodcutting"] = 100;
+    const std::string chop = R"PY(
+me.take(Axe, get("Склад_1"))
+forest = get(FOREST)
+me.go_to(forest)
+start = world.now
+me.chop_wood(forest, amount=6)
+notify(f"{me.name}: {(world.now - start).minutes:.0f} хв")
+)PY";
+    s.runtime().set_code(w.char_obj_id(0), "FOREST = 'Ліс_1'\n" + chop);
+    s.runtime().set_code(w.char_obj_id(1), "FOREST = 'Ліс_1'\n" + chop);
+    s.runtime().set_code(w.char_obj_id(2), "FOREST = 'Ліс_2'\n" + chop);
+    s.run_until(at(1, 12));
+    const double with_mentor = w.skill_of(apprentice, "woodcutting"), without = w.skill_of(alone, "woodcutting");
+    ctx.check(without > 1.0 && std::abs(with_mentor / without - b.mentor_factor) < 0.35,
+              "практика розвиває навичку, поруч із майстром — удвічі швидше: " + std::to_string(with_mentor) + " / " +
+                  std::to_string(without));
+    auto minutes = [&](const std::string& name) {
+        auto e = find_log(w, name + ": ");
+        return e ? std::stoi(e->text.substr(e->text.find(": ") + 2)) : 0;
+    };
+    const int fast = minutes("Остап"), slow = minutes("Богдан");
+    ctx.check(fast > 0 && slow > 0 && std::abs(double(slow) / fast - (1 + b.skill_speed_bonus)) < 0.1,
+              "майстер (100) працює на skill_speed_bonus швидше: " + std::to_string(fast) + " хв проти " +
+                  std::to_string(slow));
+
+    // Tool quality and the school.
+    w.add_workshop("smithy", "Кузня_1", {-60, -60});
+    w.add_workshop("school", "Школа_1", {40, 60});
+    obj(w, "Склад_1").resources["scrap"] = 4;
+    obj(w, "Склад_1").resources["wood"] = 4;
+    Character& smith = w.character(w.char_obj_id(3));
+    smith.skills["crafting"] = 80;
+    s.runtime().set_code(w.char_obj_id(3), R"PY(
+storage = get("Склад_1")
+school = get("Школа_1")
+me.pick_up(storage, "scrap", 2)
+me.pick_up(storage, "wood", 2)
+me.craft(Axe, get("Кузня_1"))
+assert me.tool.quality == 3, me.tool.quality
+me.put_back(storage)
+me.teach(school, "crafting")
+notify("урок")
+)PY");
+    s.runtime().set_code(w.char_obj_id(1), "me.go_to(get('Школа_1'))\nme.rest(hours=6)\n");
+    s.runtime().set_code(w.char_obj_id(2), R"PY(
+try:
+    me.teach(get("Школа_1"), "crafting")
+    assert False, "без навички не вчать"
+except ActionError:
+    notify("без навички не вчать")
+)PY");
+    s.run_until(at(1, 19));
+    ctx.check(find_log(w, "урок").has_value() && find_log(w, "учнів 1").has_value(), "урок у школі для тих, хто там");
+    ctx.check(std::abs(w.skill_of(apprentice, "crafting") - b.lesson_gain) < 0.01, "учень отримав навичку з уроку");
+    ctx.check(find_log(w, "без навички не вчать").has_value(), "вчити може лише той, хто вміє");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "навички зберігаються: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
 // The end of the game: the first winter survived (once, survives save/load) or everyone dead.
 void t_outcome(Ctx& ctx) {
     {

@@ -34,6 +34,7 @@ struct Opts {
     int start_day = 1;
     double start_hour = 5.5;
     bool random_rain = false;
+    bool skills = false;  // the start skills of the real game; off — every timing is the balance doc's baseline
     uint64_t seed = 1;
 };
 
@@ -49,6 +50,7 @@ Opts mvp_opts() {
     o.grain = 30;
     o.flax = 20;
     o.random_rain = true;
+    o.skills = true;
     o.seed = 3;
     return o;
 }
@@ -79,6 +81,8 @@ public:
         scene.trees = o.trees;
         scene.start_time = (o.start_day - 1) * kDay + o.start_hour * 3600.0;
         build_start_scene(s.world(), scene);
+        if (!o.skills)
+            for (Character& c : s.world().characters()) c.skills.clear();
         s.world().object(s.world().find("Склад_1")->id)->resources["wood"] = o.wood;
         return s;
     }
@@ -743,6 +747,7 @@ const TestCase kTests[] = {
     {"food", "їжа: псування, погріб, коптильня, сироварня, раціон", t_food},
     {"forestry", "лісорозсадник: саджанці, me.plant, ріст дерев", t_forestry},
     {"leisure", "лазня, пивоварня, корчма", t_leisure},
+    {"skills", "навички: практика, наставник, якість, школа", t_skills},
 };
 
 }  // namespace

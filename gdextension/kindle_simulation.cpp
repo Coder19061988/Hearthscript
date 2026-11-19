@@ -305,6 +305,10 @@ Array KindleSimulation::get_characters() const {
         d["clothes_condition"] = c.clothes.empty() ? -1.0 : c.clothes.condition;
         d["mood"] = c.mood;
         d["hangover"] = c.hangover_until > w.now();
+        Dictionary skills;
+        for (const auto& [skill, value] : c.skills) skills[to_godot(skill)] = value;
+        d["skills"] = skills;
+        d["tool_quality"] = c.tool.quality;
         d["clean"] = c.clean_until > w.now();
         Array diet;
         for (const std::string& food : w.diet(c)) diet.push_back(to_godot(food));
