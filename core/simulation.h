@@ -14,6 +14,7 @@ struct StartScene {
     int characters = 1;
     int axes = 1;
     int sickles = 0;
+    int scythes = 0;
     int bread = 10;
     int grain = 0;
     int trees = 200;

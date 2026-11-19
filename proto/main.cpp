@@ -170,7 +170,8 @@ void print_summary(Simulation& sim) {
         std::string res;
         for (const auto& [name, n] : o.resources) res += " " + name + "=" + std::to_string(n);
         std::string tools;
-        for (const auto& [name, n] : o.tools) tools += " " + name + "=" + std::to_string(n);
+        for (const ToolItem& t : o.tools)
+            tools += " " + t.kind + "(" + std::to_string(static_cast<int>(t.condition)) + "%)";
         std::printf("  %s:%s;%s\n", o.name.c_str(), res.c_str(), tools.c_str());
     }
 }

@@ -125,11 +125,33 @@ func _finish() -> void:
 	# The end of the game: a starving settlement dies; the last winter night ends with "пережито".
 	failures.append_array(_check_outcome({"characters": 2, "hunger": 100, "health": 2, "random_rain": false}, false))
 	failures.append_array(_check_outcome({"characters": 2, "start_day": 15, "start_hour": 23.5, "random_rain": false}, true))
+	failures.append_array(_check_animals())
 	print("Godot smoke: %s, дров на складі %d, записів у журналі %d" % [smoke_time, wood, _main.ui._log_lines])
 	for f in failures:
 		printerr("FAIL: " + f)
 	print("OK" if failures.is_empty() else "ПРОВАЛ")
 	quit(0 if failures.is_empty() else 1)
+
+
+## Animals live in a barn and are drawn there; a bought animal needs a barn with a free place.
+func _check_animals() -> Array:
+	var problems := []
+	var sim = _main.sim
+	sim.start({"characters": 1, "barn": true, "cows": 1, "chickens": 2, "random_rain": false})
+	_main._show_world()
+	_main._process(0.0)
+	if sim.get_animals().size() != 3 or _main.world_view._animals.size() != 3:
+		problems.append("тварини в хліві не показані: %d / %d" % [sim.get_animals().size(), _main.world_view._animals.size()])
+	if sim.add_animal("cow", "Хлів_1") != "" or sim.add_animal("cow", "Склад_1") == "":
+		problems.append("куплена тварина має ставати лише в хлів")
+	var meadow := false
+	for b in sim.get_buildings():
+		meadow = meadow or (b["kind"] == "meadow" and b["hay"] > 0)
+	if not meadow:
+		problems.append("на карті немає лугу з травою")
+	if _main.ui._build_menu.get_popup().get_item_count() != 5:
+		problems.append("у меню «Будувати» немає хліва")
+	return problems
 
 
 ## A world started with `options` runs 3 game hours; the end-of-game window must show the right outcome once,

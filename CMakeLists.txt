@@ -103,7 +103,11 @@ set(KINDLE_TESTS
   shared_code
   rules
   rule_priority
-  outcome)
+  outcome
+  knowledge
+  board
+  tool_wear
+  animals)
 foreach(t IN LISTS KINDLE_TESTS)
   add_test(NAME ${t} COMMAND kindle_proto test ${t})
 endforeach()

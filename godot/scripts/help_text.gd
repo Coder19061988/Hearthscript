@@ -20,15 +20,23 @@ const TEXT := """[font_size=20][b]Kindlescript — довідка[/b][/font_size
   • правило з тим самим іменем (свій [code]def night_sleep[/code]) замінює спільне;
   • [code]off(night_sleep)[/code] — відмінити спільне правило для цього персонажа.
 
+[b]Обмежене знання[/b]
+Персонаж бачить склад, поле, піч чи іншого персонажа лише стоячи поруч, а пам'ятає таким, яким бачив востаннє.
+На старті він знає лише свій будинок. Про небачене: кількості — 0, [code]поле.state[/code] — "unknown".
+[code]склад.known_at[/code] — коли бачив (None — ніколи);  [code]склад.known_ago > hours(6)[/code] — давно не бачив
+Тож спершу подивіться: [code]me.go_to(склад)[/code], потім [code]склад.amount("wood")[/code].
+Дошка оголошень ([code]get("Дошка_1")[/code]): [code]me.post(дошка, склад, поле)[/code] — записати, що знаєш (без об'єктів — усе);
+[code]me.read(дошка)[/code] — дізнатися новіше з записів. Обидві дії — біля дошки й займають кілька хвилин.
+
 [b]Глобальні функції[/b]
 [code]get("Склад_1")[/code] — об'єкт за назвою (інакше NotFoundError)
-[code]buildings(Storage)[/code] — список будівель типу Storage / House / Forest / Field
+[code]buildings(Storage)[/code] — список будівель типу Storage / House / Forest / Field / Board
 [code]time(18, 0)[/code], [code]hours(2)[/code], [code]minutes(30)[/code] — час доби і тривалість
 [code]notify("текст")[/code] — запис у журнал подій;  [code]print(...)[/code] — теж у журнал
 [code]@on(Event.RAIN, priority=1)[/code] — обробник події (менше число — вищий пріоритет)
 
 [b]Світ (лише читання)[/b]
-[code]world.time, world.day, world.is_night, world.is_raining[/code]
+[code]world.time, world.day, world.now[/code] (день і час),  [code]world.is_night, world.is_raining[/code]
 [code]world.season[/code] (Season.WARM / Season.WINTER), [code]world.season_days_left[/code], [code]world.temperature[/code] (°C)
 
 [b]Персонаж: me[/b]
@@ -37,11 +45,16 @@ const TEXT := """[font_size=20][b]Kindlescript — довідка[/b][/font_size
 
 [b]Дії[/b] (тривалі можна обмежити: amount=, until=time(18, 0), hours=2)
 [code]me.go_to(об'єкт)[/code], [code]me.go_home()[/code], [code]me.travel_time(об'єкт)[/code]
-[code]me.take(Axe, склад)[/code], [code]me.take(Sickle, склад)[/code], [code]me.put_back(склад)[/code]
+[code]me.take(Axe, склад)[/code] — найкращу цілу вільну;  [code]me.take(сокира)[/code] — саме цю;  [code]me.put_back(склад)[/code]
 [code]me.chop_wood(ліс)[/code] — дрова в руки; повертає кількість
 [code]me.drop(склад)[/code] — покласти все, що несе;  [code]me.pick_up(склад, "bread", 1)[/code]
 [code]me.eat("bread")[/code]
 [code]me.sleep(until=time(6, 0))[/code] — спати вдома;  [code]me.rest(hours=1)[/code];  [code]me.wait_until(time(6, 0))[/code]
+
+[b]Інструменти зношуються[/b] (~40 год рубки чи жнив; ремонту поки немає — бережіть їх)
+[code]me.tool.condition[/code] — стан, %;  [code]me.tool.is_broken[/code];  [code]me.tool.quality[/code] (поки 1);  [code]isinstance(me.tool, Axe)[/code]
+[code]tools(Axe, free=True)[/code] — цілі вільні сокири, про які персонаж знає (бачив на складі)
+Поломка посеред роботи — [code]ToolBrokenError[/code] ([code]e.done[/code] — скільки встигли); зламаний поверніть: [code]me.put_back(склад)[/code]
 
 [b]Тепло й зима[/b]
 [code]me.wear(WarmClothes)[/code] / [code]me.wear(Clothes)[/code] — переодягтися вдома (одяг лежить у скрині)
@@ -53,7 +66,14 @@ const TEXT := """[font_size=20][b]Kindlescript — довідка[/b][/font_size
 [code]me.harvest(поле)[/code] — жати серпом; зерно в руки
 [code]me.grind(будинок)[/code] — змолоти зерно, яке несеш, на борошно (жорна в будинку)
 [code]me.bake(будинок)[/code] — спекти хліб із борошна (піч має горіти)
-[code]поле.state[/code] ("empty" / "sown" / "ripe"), [code]поле.is_ripe, поле.growth, поле.grain_left[/code]
+[code]поле.state[/code] ("empty" / "sown" / "ripe" / "unknown"), [code]поле.is_ripe, поле.growth, поле.grain_left[/code]
+
+[b]Тварини[/b] (купуються в торгівлі й живуть у хліві: «Будувати» → «Хлів»)
+[code]animals(Cow)[/code], [code]animals(Chicken)[/code];  [code]тварина.hunger, .health, .is_alive, .home[/code];  [code]корова.milk[/code], [code]курка.eggs[/code]
+У теплу пору пасуться самі, узимку — лише на кормі: [code]me.feed(тварина)[/code] (корові — сіно, курці — зерно з рук)
+[code]me.milk(корова)[/code], [code]me.collect_eggs(курка)[/code];  [code]me.slaughter(тварина)[/code] — м'ясо в руки
+Сіно: [code]me.take(Scythe, склад)[/code], [code]me.mow(get("Луг_1"))[/code] — лише в теплу пору; корові на зиму ~30 сіна
+Їжа: [code]me.eat("bread")[/code], а також "meat", "milk", "eggs"
 
 [b]Будівництво й заселення[/b]
 «Будувати» вгорі → тип → клік на карті → назва. Далі — кодом:
@@ -68,7 +88,8 @@ const TEXT := """[font_size=20][b]Kindlescript — довідка[/b][/font_size
 [code]склад.amount("wood")[/code] — також "bread", "grain", "flour";  [code]склад.has_tool(Axe)[/code];  [code]ліс.trees_left[/code]
 
 [b]Винятки[/b] (усі — ActionError: [code]e.reason[/code], [code]e.done[/code])
-NoItemError, ReservedError, TooHeavyError, NoHomeError, NotFoundError, WorkplaceBusyError (жорна чи піч зайняті).
+NoItemError, ReservedError, TooHeavyError, NoHomeError, NotFoundError, WorkplaceBusyError (жорна чи піч зайняті),
+ToolBrokenError (інструмент зламався).
 Необроблений виняток зупиняє код персонажа — дивіться журнал подій.
 
 [b]Збереження[/b]
@@ -78,4 +99,6 @@ NoItemError, ReservedError, TooHeavyError, NoHomeError, NotFoundError, Workplace
 [b]Керування[/b]
 Пробіл — пауза; 1 / 2 / 3 — швидкість ×1 / ×3 / ×10; Ctrl+Enter — застосувати код.
 Клік на персонажа — вибрати. Камера: ПКМ — обертати, СКМ або WASD — рухати, коліщатко — масштаб.
+[b]V[/b] — від першої особи: пройтися поселенням між персонажами (на гру це не впливає).
+Миша — роззиратися, WASD — іти, Shift — бігти, клік — вибрати персонажа під прицілом; V або Esc — назад до огляду.
 """

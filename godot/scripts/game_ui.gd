@@ -1,14 +1,15 @@
 extends CanvasLayer
 ## Interface (MVP §6): top bar with time, speed and the "Будувати" / "Гра" menus, event log, side panel with
 ## the selected character's state and tabs: the character's own code, the shared code, global variables.
-## The left area stays transparent: the 3D view is behind it.
+## The left area stays transparent: the 3D view is behind it. In first person (set_first_person) only the top bar
+## stays, with a crosshair in the middle of the screen.
 
 signal speed_selected(speed: float)
 signal code_applied(code: String)         # the selected character's own code
 signal shared_code_applied(code: String)  # the shared code of the settlement
 signal character_selected(id: int)
 signal restart_requested
-signal build_requested(kind: String)      # "house" / "storage" / "field": start choosing a place
+signal build_requested(kind: String)      # "house" / "storage" / "field" / "barn" / "board": start choosing a place
 signal blueprint_named(name: String)      # the name dialog was confirmed
 signal blueprint_cancelled
 signal global_set(name: String, text: String)
@@ -18,6 +19,7 @@ signal load_requested
 signal save_path_chosen(path: String)
 signal load_path_chosen(path: String)
 signal outcome_closed(survived: bool)     # the end-of-game window was closed: back to the game
+signal first_person_requested            # the "Від першої особи" button (the V key is handled by main.gd)
 
 const CodePane := preload("res://scripts/code_pane.gd")
 const OutcomeDialog := preload("res://scripts/outcome_dialog.gd")
@@ -28,28 +30,37 @@ const PANEL_WIDTH := 560
 const LOG_HEIGHT := 200
 const LOG_LIMIT := 400
 const SPEEDS := [0.0, 1.0, 3.0, 10.0]
-const BUILD_KINDS := ["house", "storage", "field"]
-const BUILD_NAMES := {"house": "Будинок", "storage": "Склад", "field": "Поле"}
+const BUILD_KINDS := ["house", "storage", "field", "barn", "board"]
+const BUILD_NAMES := {"house": "Будинок", "storage": "Склад", "field": "Поле", "barn": "Хлів", "board": "Дошка оголошень"}
 const ACTION_NAMES := {
 	"go_to": "іде до", "go_home": "іде додому", "take": "бере інструмент", "put_back": "повертає інструмент",
 	"chop_wood": "рубає дрова", "drop": "кладе все на склад", "pick_up": "бере зі складу", "eat": "їсть",
 	"sleep": "спить", "rest": "відпочиває", "wait": "чекає", "heat": "топить піч", "wear": "переодягається",
 	"sow": "сіє", "harvest": "жне", "grind": "меле зерно", "bake": "пече хліб",
 	"deliver": "несе матеріали на будову", "build": "будує", "move_into": "переселяється",
+	"post": "пише на дошці оголошень", "read": "читає дошку оголошень",
+	"mow": "косить сіно", "feed": "годує тварину", "milk": "доїть корову", "collect_eggs": "збирає яйця",
+	"slaughter": "забиває тварину",
 }
-const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "зерно", "flour": "борошно"}
-const TOOL_NAMES := {"axe": "сокира", "sickle": "серп"}
+const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "зерно", "flour": "борошно",
+	"hay": "сіно", "milk": "молоко", "eggs": "яйця", "meat": "м'ясо"}
+const TOOL_NAMES := {"axe": "сокира", "sickle": "серп", "scythe": "коса"}
 const CLOTHES_NAMES := {"clothes": "звичайний", "warm_clothes": "теплий"}
 const LOG_COLORS := {
 	"info": "#d8d8d8", "notify": "#8fd0ff", "print": "#a8a8a8",
 	"warning": "#f0b45a", "error": "#ff6b6b", "death": "#ff8080", "outcome": "#ffd75e",
 }
+const FIRST_PERSON_HINT := ("Від першої особи: миша — роззиратися · WASD — іти · Shift — бігти · " +
+	"клік — вибрати персонажа · V або Esc — вийти")
 
 var _time_label: Label
 var _storage_label: Label
 var _speed_buttons := {}
 var _build_menu: MenuButton
 var _hint: Label
+var _first_person_button: Button
+var _crosshair: Control
+var _log_panel: Control
 var _log: RichTextLabel
 var _log_lines := 0
 var _side: PanelContainer
@@ -107,10 +118,33 @@ func _ready() -> void:
 	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hint.visible = false
 	view_area.add_child(_hint)
-	left.add_child(_build_log())
+	view_area.add_theme_constant_override("margin_right", 8)
+	view_area.add_theme_constant_override("margin_bottom", 8)
+	_first_person_button = Button.new()
+	_first_person_button.text = "Від першої особи (V)"
+	_first_person_button.tooltip_text = "Пройтися поселенням: миша — роззиратися, WASD — іти, Shift — бігти"
+	_first_person_button.focus_mode = Control.FOCUS_NONE
+	_first_person_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+	_first_person_button.size_flags_vertical = Control.SIZE_SHRINK_END
+	_first_person_button.pressed.connect(func() -> void: first_person_requested.emit())
+	view_area.add_child(_first_person_button)
+	_log_panel = _build_log()
+	left.add_child(_log_panel)
 
 	_side = _build_side_panel()
 	columns.add_child(_side)
+
+	# Anchored to the screen center with no size: the lines are drawn around that point.
+	_crosshair = Control.new()
+	_crosshair.set_anchors_preset(Control.PRESET_CENTER)
+	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crosshair.visible = false
+	_crosshair.draw.connect(func() -> void:
+		for axis in [Vector2.RIGHT, Vector2.DOWN]:
+			_crosshair.draw_line(-axis * 9.0, axis * 9.0, Color(0, 0, 0, 0.6), 4.0)
+		for axis in [Vector2.RIGHT, Vector2.DOWN]:
+			_crosshair.draw_line(-axis * 8.0, axis * 8.0, Color.WHITE, 2.0))
+	root.add_child(_crosshair)
 
 	_help = AcceptDialog.new()
 	_help.title = "Довідка (F1)"
@@ -412,6 +446,15 @@ func set_hint(text: String) -> void:
 	_hint.visible = text != ""
 
 
+## First person frees the whole screen for the view: no side panel, no log; a crosshair and a hint instead.
+func set_first_person(on: bool) -> void:
+	_side.visible = not on
+	_log_panel.visible = not on
+	_first_person_button.visible = not on
+	_crosshair.visible = on
+	set_hint(FIRST_PERSON_HINT if on else "")
+
+
 func ask_blueprint_name(kind: String, default_name: String) -> void:
 	_name_caption.text = "Назва для креслення «%s» (за нею код знаходить будівлю: get(\"…\"))" % BUILD_NAMES.get(kind, kind)
 	_name_edit.text = default_name
@@ -459,12 +502,13 @@ func update_status(time_text: String, raining: bool, night: bool, winter: bool, 
 	for b in buildings:
 		if b["kind"] == "storage" and b["built"]:
 			var res: Dictionary = b["resources"]
-			parts.append("%s: хліб %d, зерно %d, дрова %d" % [b["name"], res.get("bread", 0), res.get("grain", 0),
-				res.get("wood", 0)])
+			parts.append("%s: хліб %d, зерно %d, дрова %d, сіно %d" % [b["name"], res.get("bread", 0), res.get("grain", 0),
+				res.get("wood", 0), res.get("hay", 0)])
 	_storage_label.text = "   ".join(parts)
 
 
-func update_character(c: Dictionary) -> void:
+## `knowledge`: what the character knows about buildings (KindleSimulation.get_knowledge).
+func update_character(c: Dictionary, knowledge: Array = []) -> void:
 	if c.is_empty():
 		_info.text = ""
 		_own_pane.show_executing_line(-1)
@@ -497,8 +541,13 @@ func update_character(c: Dictionary) -> void:
 		for res in carried:
 			carrying.append("%s ×%d" % [RESOURCE_NAMES.get(res, res), carried[res]])
 		lines.append("Дім: %s · Одяг: %s · Інструмент: %s" % [
-			c["home"] if c["home"] != "" else "—", CLOTHES_NAMES.get(c["clothes"], "—"), TOOL_NAMES.get(c["tool"], "—")])
+			c["home"] if c["home"] != "" else "—", CLOTHES_NAMES.get(c["clothes"], "—"), _tool_text(c)])
 		lines.append("Несе: %s" % (", ".join(carrying) if not carrying.is_empty() else "—"))
+		var known := []
+		for k in knowledge:
+			known.append("%s — %s" % [k["name"], _ago_text(k["ago"])])
+		if not known.is_empty():
+			lines.append("[color=#9a9a9a]Знає (бачив): %s[/color]" % " · ".join(known))
 	_info.text = "\n".join(lines)
 	var running_line: int = c["line"] - 1 if state == "running" else -1
 	_own_pane.show_executing_line(running_line if c["line_file"] == "own" else -1)
@@ -549,6 +598,7 @@ func show_fatal(text: String) -> void:
 	_fatal.text = text
 	_fatal.visible = true
 	_side.visible = false
+	_first_person_button.visible = false
 
 
 # ---------------------------------------------------------------- internals
@@ -556,6 +606,31 @@ func show_fatal(text: String) -> void:
 func _need(value: float, threshold: float, low_is_bad: bool) -> String:
 	var bad := value <= threshold if low_is_bad else value >= threshold
 	return "[color=#ff7070]%d[/color]" % int(round(value)) if bad else "%d" % int(round(value))
+
+
+## The tool in hands with its condition: "сокира 64%", "сокира (зламана)", "—".
+func _tool_text(c: Dictionary) -> String:
+	var tool: String = c["tool"]
+	if tool == "":
+		return "—"
+	var condition: float = c["tool_condition"]
+	if condition <= 0.0:
+		return "[color=#ff7070]%s (зламаний)[/color]" % TOOL_NAMES.get(tool, tool)
+	var text := "%s %d%%" % [TOOL_NAMES.get(tool, tool), int(ceil(condition))]
+	return "[color=#f0b45a]%s[/color]" % text if condition < 25.0 else text
+
+
+## How long ago a character saw something: game seconds, -1 = never.
+func _ago_text(seconds: float) -> String:
+	if seconds < 0.0:
+		return "не бачив"
+	if seconds < 60.0:
+		return "щойно"
+	if seconds < 3600.0:
+		return "%d хв тому" % int(seconds / 60.0)
+	if seconds < 86400.0:
+		return "%d год тому" % int(seconds / 3600.0)
+	return "%d дн тому" % int(seconds / 86400.0)
 
 
 func _escape(text: String) -> String:

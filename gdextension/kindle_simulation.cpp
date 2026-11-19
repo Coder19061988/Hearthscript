@@ -20,19 +20,6 @@ namespace {
 String to_godot(const std::string& s) { return String::utf8(s.c_str()); }
 std::string to_std(const String& s) { return std::string(s.utf8().get_data()); }
 
-const char* log_kind_name(kindle::LogKind k) {
-    switch (k) {
-        case kindle::LogKind::Info: return "info";
-        case kindle::LogKind::Notify: return "notify";
-        case kindle::LogKind::Print: return "print";
-        case kindle::LogKind::Warning: return "warning";
-        case kindle::LogKind::Error: return "error";
-        case kindle::LogKind::Death: return "death";
-        case kindle::LogKind::Outcome: return "outcome";
-    }
-    return "info";
-}
-
 const char* state_id(kindle::AgentState s) {
     switch (s) {
         case kindle::AgentState::NoCode: return "no_code";
@@ -71,8 +58,11 @@ void KindleSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_outcome"), &KindleSimulation::get_outcome);
     ClassDB::bind_method(D_METHOD("get_buildings"), &KindleSimulation::get_buildings);
     ClassDB::bind_method(D_METHOD("get_characters"), &KindleSimulation::get_characters);
+    ClassDB::bind_method(D_METHOD("get_animals"), &KindleSimulation::get_animals);
+    ClassDB::bind_method(D_METHOD("add_animal", "species", "barn"), &KindleSimulation::add_animal);
     ClassDB::bind_method(D_METHOD("add_blueprint", "kind", "name", "position"), &KindleSimulation::add_blueprint);
     ClassDB::bind_method(D_METHOD("get_build_costs"), &KindleSimulation::get_build_costs);
+    ClassDB::bind_method(D_METHOD("get_knowledge", "character_id"), &KindleSimulation::get_knowledge);
     ClassDB::bind_method(D_METHOD("set_global", "name", "value"), &KindleSimulation::set_global);
     ClassDB::bind_method(D_METHOD("remove_global", "name"), &KindleSimulation::remove_global);
     ClassDB::bind_method(D_METHOD("get_globals"), &KindleSimulation::get_globals);
@@ -101,6 +91,7 @@ void KindleSimulation::start(const Dictionary& options) {
     scene.characters = int(options.get("characters", 4));
     scene.axes = int(options.get("axes", scene.characters));
     scene.sickles = int(options.get("sickles", 0));
+    scene.scythes = int(options.get("scythes", 0));
     scene.bread = int(options.get("bread", 40));
     scene.grain = int(options.get("grain", 0));
     scene.trees = int(options.get("trees", 200));
@@ -122,6 +113,14 @@ void KindleSimulation::start(const Dictionary& options) {
     sim_ = std::make_unique<kindle::Simulation>(balance_, static_cast<uint64_t>(seed));
     sim_->world().set_random_rain(random_rain);
     kindle::build_start_scene(sim_->world(), scene);
+    // For tests and screenshots: a finished barn with animals (in the game, barns are built and animals bought).
+    if (bool(options.get("barn", false))) {
+        kindle::World& w = sim_->world();
+        const int barn = w.add_barn("Хлів_1", {-60, 60});
+        std::string error;
+        for (int i = 0; i < int(options.get("cows", 0)); ++i) w.add_animal("cow", barn, error);
+        for (int i = 0; i < int(options.get("chickens", 0)); ++i) w.add_animal("chicken", barn, error);
+    }
     if (const kindle::Object* storage = sim_->world().find("Склад_1"))
         sim_->world().object(storage->id)->resources["wood"] = wood;
     // Called from inside character coroutines: only queue, never touch the Godot API here.
@@ -172,7 +171,7 @@ Array KindleSimulation::get_buildings() const {
     if (!sim_) return result;
     kindle::World& w = sim_->world();
     for (const kindle::Object& o : w.objects()) {
-        if (o.kind == kindle::ObjKind::Person) continue;
+        if (o.kind == kindle::ObjKind::Person || o.kind == kindle::ObjKind::Animal) continue;
         Dictionary d;
         d["id"] = o.id;
         d["kind"] = kindle::kind_name(o.kind);
@@ -180,7 +179,10 @@ Array KindleSimulation::get_buildings() const {
         d["position"] = Vector2(real_t(o.pos.x), real_t(o.pos.y));
         if (o.kind == kindle::ObjKind::Storage) {
             d["resources"] = to_dictionary(o.resources);
-            d["tools"] = to_dictionary(o.tools);
+            std::map<std::string, int> whole, broken;
+            for (const kindle::ToolItem& t : o.tools) (t.broken() ? broken : whole)[t.kind]++;
+            d["tools"] = to_dictionary(whole);
+            d["broken_tools"] = to_dictionary(broken);
         }
         if (o.kind == kindle::ObjKind::House) {
             d["firewood"] = o.firewood;
@@ -210,6 +212,15 @@ Array KindleSimulation::get_buildings() const {
             d["trees_left"] = w.forest_trees_left(o);
             d["trees_total"] = o.trees_total;
         }
+        if (o.kind == kindle::ObjKind::Board) d["notes"] = int(w.board_notes(o.id).size());
+        if (o.kind == kindle::ObjKind::Barn) {
+            d["capacity"] = o.capacity;
+            d["animals"] = w.animals_count(o.id);
+        }
+        if (o.kind == kindle::ObjKind::Meadow) {
+            d["hay"] = int(std::floor(o.hay + 1e-6));
+            d["hay_max"] = balance_.meadow_hay_max;
+        }
         result.push_back(d);
     }
     return result;
@@ -231,7 +242,8 @@ Array KindleSimulation::get_characters() const {
         d["fatigue"] = c.fatigue;
         d["health"] = c.health;
         d["warmth"] = c.warmth;
-        d["tool"] = to_godot(c.tool);
+        d["tool"] = to_godot(c.tool.kind);
+        d["tool_condition"] = c.tool.empty() ? -1.0 : c.tool.condition;
         d["clothes"] = to_godot(c.clothes);
         d["home"] = c.home >= 0 ? to_godot(w.objects()[c.home].name) : String();
         d["carrying"] = to_dictionary(c.carrying);
@@ -253,6 +265,37 @@ Array KindleSimulation::get_characters() const {
     return result;
 }
 
+Array KindleSimulation::get_animals() const {
+    Array result;
+    if (!sim_) return result;
+    kindle::World& w = sim_->world();
+    for (const kindle::Object& o : w.objects()) {
+        if (o.kind != kindle::ObjKind::Animal || o.removed) continue;
+        Dictionary d;
+        d["id"] = o.id;
+        d["name"] = to_godot(o.name);
+        d["species"] = to_godot(o.species);
+        d["position"] = Vector2(real_t(o.pos.x), real_t(o.pos.y));
+        d["home"] = o.home;
+        d["alive"] = o.alive;
+        d["hunger"] = o.hunger;
+        d["health"] = o.health;
+        d["produce"] = int(std::floor(o.produce + 1e-6));
+        result.push_back(d);
+    }
+    return result;
+}
+
+String KindleSimulation::add_animal(const String& species, const String& barn) {
+    ERR_FAIL_COND_V_MSG(!sim_, "start() first", "call start() first");
+    kindle::World& w = sim_->world();
+    const kindle::Object* b = w.find(to_std(barn));
+    if (!b) return to_godot("Немає хліва " + to_std(barn));
+    std::string error;
+    if (w.add_animal(to_std(species), b->id, error) < 0) return to_godot(error);
+    return String();
+}
+
 String KindleSimulation::add_blueprint(const String& kind, const String& name, const Vector2& position) {
     ERR_FAIL_COND_V_MSG(!sim_, "start() first", "call start() first");
     kindle::ObjKind k;
@@ -262,6 +305,10 @@ String KindleSimulation::add_blueprint(const String& kind, const String& name, c
         k = kindle::ObjKind::Storage;
     else if (kind == "field")
         k = kindle::ObjKind::Field;
+    else if (kind == "barn")
+        k = kindle::ObjKind::Barn;
+    else if (kind == "board")
+        k = kindle::ObjKind::Board;
     else
         return to_godot("Невідомий тип будівлі");
     std::string error;
@@ -280,7 +327,32 @@ Dictionary KindleSimulation::get_build_costs() const {
     costs["house"] = entry(balance_.house_build_wood, balance_.house_build_hours);
     costs["storage"] = entry(balance_.storage_build_wood, balance_.storage_build_hours);
     costs["field"] = entry(0, balance_.field_build_hours);
+    costs["barn"] = entry(balance_.barn_build_wood, balance_.barn_build_hours);
+    costs["board"] = entry(balance_.board_build_wood, balance_.board_build_hours);
     return costs;
+}
+
+Array KindleSimulation::get_knowledge(int character_id) const {
+    Array result;
+    if (!sim_) return result;
+    kindle::World& w = sim_->world();
+    const kindle::Object* self = w.object(character_id);
+    if (!self || self->kind != kindle::ObjKind::Person) return result;
+    const kindle::Character& c = w.character(character_id);
+    for (const kindle::Object& o : w.objects()) {
+        if (o.kind == kindle::ObjKind::Person || o.kind == kindle::ObjKind::Board || o.kind == kindle::ObjKind::Animal)
+            continue;
+        auto it = c.known.find(o.id);
+        Dictionary d;
+        d["name"] = to_godot(o.name);
+        d["kind"] = kindle::kind_name(o.kind);
+        if (w.sees(c, o))
+            d["ago"] = 0.0;  // standing at it: sees it now (the core learns lazily, on the next read)
+        else
+            d["ago"] = it == c.known.end() ? -1.0 : std::max(0.0, c.local_time - it->second.time);
+        result.push_back(d);
+    }
+    return result;
 }
 
 String KindleSimulation::set_global(const String& name, const Variant& value) {
@@ -362,7 +434,7 @@ Array KindleSimulation::take_log() {
     for (const kindle::LogEntry& e : pending_log_) {
         Dictionary d;
         d["time_text"] = to_godot(w.format_time(e.time));
-        d["kind"] = log_kind_name(e.kind);
+        d["kind"] = kindle::log_kind_name(e.kind);
         d["who"] = e.object_id >= 0 ? to_godot(w.objects()[e.object_id].name) : String();
         d["text"] = to_godot(e.text);
         d["detail"] = to_godot(e.detail);

@@ -14,18 +14,21 @@ constexpr int kNameCount = sizeof(kNames) / sizeof(kNames[0]);
 void build_start_scene(World& world, const StartScene& scene) {
     // Distances from the balance doc: house 60 m from the storage, forest 300 m from the storage.
     // The field is ~170 m from the storage, on the other side from the forest.
-    world.add_storage("Склад_1", {0, 0}, {{"axe", scene.axes}, {"sickle", scene.sickles}},
+    world.add_storage("Склад_1", {0, 0}, {{"axe", scene.axes}, {"sickle", scene.sickles}, {"scythe", scene.scythes}},
                       {{"bread", scene.bread}, {"wood", 0}, {"grain", scene.grain}, {"flour", 0}});
     const int warm_clothes = scene.warm_clothes < 0 ? scene.characters : scene.warm_clothes;
     int house = world.add_house("Будинок_1", {60, 0}, {{"warm_clothes", warm_clothes}, {"clothes", 0}});
     world.add_forest("Ліс_1", {0, 300}, scene.trees);
     world.add_field("Поле_1", {120, -120});
+    world.add_board("Дошка_1", {110, 20});  // ~55 m past the house; its label clears the other labels on screen
+    world.add_meadow("Луг_1", {-120, 120});  // hay for animals; animals themselves are bought (trade)
     for (int i = 0; i < scene.characters; ++i) {
         std::string name = kNames[i % kNameCount];
         if (i >= kNameCount) name += "_" + std::to_string(i / kNameCount + 1);
         world.add_character(name, house, {60, 0}, scene.hunger, scene.fatigue, scene.health);
     }
     world.set_start_time(scene.start_time);
+    world.init_knowledge();  // everyone starts at home: knows the house and the housemates, nothing else
 }
 
 Simulation::Simulation(const Balance& balance, uint64_t seed) : world_(balance, seed), runtime_(world_) {}

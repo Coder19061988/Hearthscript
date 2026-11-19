@@ -37,9 +37,13 @@ while True:
             me.chop_wood(forest, until=time(18, 0))
         except TooHeavyError:
             pass
+        except ToolBrokenError as e:
+            notify(f"Зламалася сокира, нарубано {e.done}")
+            me.drop(storage)
+            break
         me.drop(storage)
         eat_if_hungry()
 
-    me.put_back(storage)
+    me.put_back(storage)  # і зламану — на склад; завтра візьметься ціла, якщо є
     eat_if_hungry()
     me.sleep(until=time(6, 0))

@@ -11,7 +11,7 @@ import inspect as _inspect
 
 _DAY = 86400.0
 _POLL_SECONDS = 60.0
-_RESOURCES = ("wood", "bread", "grain", "flour")
+_RESOURCES = ("wood", "bread", "grain", "flour", "hay", "milk", "eggs", "meat")
 
 
 def _is_number(x):
@@ -173,6 +173,67 @@ class TimeOfDay:
     __str__ = __repr__
 
 
+class Moment:
+    """Момент гри: день і час доби (world.now, obj.known_at). Різниця моментів — тривалість."""
+
+    def __init__(self, seconds):
+        self.seconds = float(seconds)
+
+    @property
+    def day(self):
+        return int(self.seconds // _DAY) + 1
+
+    @property
+    def time(self):
+        return TimeOfDay(self.seconds % _DAY)
+
+    def _other(self, other):
+        if not isinstance(other, Moment):
+            raise TypeError(f"момент гри можна порівнювати лише з моментом (world.now, obj.known_at), а не з {_tname(other)}")
+        return other.seconds
+
+    def __add__(self, other):
+        if isinstance(other, Duration):
+            return Moment(self.seconds + other.seconds)
+        return NotImplemented
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        if isinstance(other, Moment):
+            return Duration(self.seconds - other.seconds)
+        if isinstance(other, Duration):
+            return Moment(self.seconds - other.seconds)
+        return NotImplemented
+
+    def __eq__(self, other):
+        return isinstance(other, Moment) and self.seconds == other.seconds
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __lt__(self, other):
+        return self.seconds < self._other(other)
+
+    def __le__(self, other):
+        return self.seconds <= self._other(other)
+
+    def __gt__(self, other):
+        return self.seconds > self._other(other)
+
+    def __ge__(self, other):
+        return self.seconds >= self._other(other)
+
+    def __hash__(self):
+        return hash(self.seconds)
+
+    def __repr__(self):
+        return f"день {self.day}, {self.time}"
+
+    __str__ = __repr__
+
+
 def time(h, m=0):
     """Час доби, наприклад time(18, 0)."""
     if not isinstance(h, int) or not isinstance(m, int):
@@ -208,6 +269,11 @@ class _World:
     @property
     def day(self):
         return _kn.world_day()
+
+    @property
+    def now(self):
+        """Поточний момент (день і час): world.now - storage.known_at — скільки часу минуло."""
+        return Moment(_kn.world_now())
 
     @property
     def is_night(self):
@@ -318,10 +384,52 @@ class WorkplaceBusyError(ActionError):
     pass
 
 
+class ToolBrokenError(ActionError):
+    pass
+
+
 # ------------------------------------------------------------------ tools and objects
 
 class Tool:
+    """Інструмент. Axe і Sickle — типи (me.take(Axe, склад)); me.tool і tools(...) повертають самі
+    інструменти: quality (якість 1–5), condition (стан, %), is_broken, where (склад чи персонаж).
+    Дані — такі, якими персонаж їх знає на момент виклику. Тип: isinstance(me.tool, Axe)."""
     _kind = ""
+
+    def __init__(self, tid=-1, quality=1, condition=100.0, where=None):
+        self._id = tid
+        self._quality = quality
+        self._condition = condition
+        self._where = where
+
+    @property
+    def quality(self):
+        return self._quality
+
+    @property
+    def condition(self):
+        return self._condition
+
+    @property
+    def is_broken(self):
+        return self._condition <= 0
+
+    @property
+    def where(self):
+        return self._where
+
+    def __eq__(self, other):
+        return isinstance(other, Tool) and other._id == self._id
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self._id)
+
+    def __repr__(self):
+        state = "зламаний" if self.is_broken else f"стан {self._condition:.0f}%"
+        return f"{_tname(self)}(якість {self._quality}, {state})"
 
 
 class Axe(Tool):
@@ -332,7 +440,16 @@ class Sickle(Tool):
     _kind = "sickle"
 
 
-_TOOLS = {"axe": Axe, "sickle": Sickle}
+class Scythe(Tool):
+    _kind = "scythe"
+
+
+_TOOLS = {"axe": Axe, "sickle": Sickle, "scythe": Scythe}
+
+
+def _tool_from(info):
+    tid, kind, quality, condition, where = info
+    return _TOOLS[kind](tid, quality, condition, _wrap(where))
 
 
 class Clothes:
@@ -357,7 +474,7 @@ def _clothes_kind(item):
 def _tool_kind(tool):
     if isinstance(tool, type) and issubclass(tool, Tool) and tool is not Tool:
         return tool._kind
-    raise TypeError(f"очікується клас інструмента, наприклад Axe, а не {_tname(tool)}")
+    raise TypeError(f"очікується тип інструмента, наприклад Axe, а не {_tname(tool)}")
 
 
 def _check_resource(resource):
@@ -376,6 +493,18 @@ class GameObject:
     def name(self):
         return self._name
 
+    @property
+    def known_at(self):
+        """Коли персонаж востаннє бачив цей об'єкт (сам чи з дошки оголошень); None — ніколи."""
+        t = _kn.known_at(self._id)
+        return None if t is None else Moment(t)
+
+    @property
+    def known_ago(self):
+        """Як давно персонаж знає стан об'єкта (тривалість); None — ніколи не бачив."""
+        t = _kn.known_at(self._id)
+        return None if t is None else Duration(_kn.world_now() - t)
+
     def __eq__(self, other):
         return isinstance(other, GameObject) and other._id == self._id
 
@@ -390,7 +519,8 @@ class GameObject:
 
 
 class Building(GameObject):
-    """Склад, будинок або поле. Поставлене гравцем креслення — будова, доки не збудована."""
+    """Склад, будинок, поле або дошка. Поставлене гравцем креслення — будова, доки не збудована.
+    Стан будівлі персонаж знає лише таким, яким бачив його востаннє (known_at)."""
 
     @property
     def is_built(self):
@@ -463,6 +593,7 @@ class Field(Building):
 
     @property
     def state(self):
+        """"empty", "sown", "ripe" або "unknown" — якщо персонаж ще не бачив поля."""
         return _kn.field_info(self._id, "state")
 
     @property
@@ -476,6 +607,77 @@ class Field(Building):
     @property
     def grain_left(self):
         return _kn.field_info(self._id, "grain_left")
+
+
+class Barn(Building):
+    """Хлів: тут живуть тварини; capacity — скільки місць."""
+    _kind = "barn"
+
+    @property
+    def capacity(self):
+        return _kn.building_info(self._id, "capacity")
+
+    @property
+    def animals(self):
+        return [_wrap(info) for info in _kn.building_info(self._id, "residents")]
+
+    @property
+    def free_places(self):
+        return self.capacity - len(_kn.building_info(self._id, "residents"))
+
+
+class Meadow(GameObject):
+    """Луг: сінокіс. me.mow(луг) — косити сіно косою."""
+    _kind = "meadow"
+
+    @property
+    def hay_left(self):
+        return _kn.meadow_hay(self._id)
+
+
+class Animal(GameObject):
+    """Тварина: Cow (корова) чи Chicken (курка). Живе в хліві (home);
+    стан — такий, яким персонаж бачив її востаннє."""
+    _kind = "animal"
+
+    @property
+    def hunger(self):
+        return _kn.animal_info(self._id, "hunger")
+
+    @property
+    def health(self):
+        return _kn.animal_info(self._id, "health")
+
+    @property
+    def is_alive(self):
+        return _kn.animal_info(self._id, "alive")
+
+    @property
+    def home(self):
+        return _wrap(_kn.animal_info(self._id, "home"))
+
+
+class Cow(Animal):
+    _kind = "cow"
+
+    @property
+    def milk(self):
+        """Скільки молока можна надоїти."""
+        return _kn.animal_info(self._id, "produce")
+
+
+class Chicken(Animal):
+    _kind = "chicken"
+
+    @property
+    def eggs(self):
+        """Скільки яєць чекає на збір."""
+        return _kn.animal_info(self._id, "produce")
+
+
+class Board(Building):
+    """Дошка оголошень: me.post(дошка, ...) записує, що персонаж знає; me.read(дошка) — читає записи."""
+    _kind = "board"
 
 
 class Person(GameObject):
@@ -504,8 +706,9 @@ class Person(GameObject):
 
     @property
     def tool(self):
-        kind = _kn.char_tool(self._id)  # None is unhashable in pocketpy: no dict lookup with it
-        return None if kind is None else _TOOLS.get(kind)
+        """Інструмент у руках (Axe / Sickle з quality, condition, is_broken) або None."""
+        info = _kn.char_tool(self._id)  # None is unhashable in pocketpy: no dict lookup with it
+        return None if info is None else _tool_from(info)
 
     @property
     def carrying(self):
@@ -516,7 +719,8 @@ class Person(GameObject):
         return _wrap(_kn.char_home(self._id))
 
 
-_CLASSES = {"storage": Storage, "house": House, "forest": Forest, "field": Field, "person": Person}
+_CLASSES = {"storage": Storage, "house": House, "forest": Forest, "field": Field, "person": Person, "board": Board,
+            "barn": Barn, "meadow": Meadow, "cow": Cow, "chicken": Chicken}
 
 
 def _wrap(info):
@@ -564,7 +768,16 @@ class Me(Person):
     def go_home(self):
         return _kn.act("go_home", -1, None)
 
-    def take(self, tool, storage):
+    def take(self, tool, storage=None):
+        """Взяти інструмент зі складу: me.take(Axe, склад) — найкращий цілий вільний,
+        me.take(сокира) — саме цей (з tools(...)); персонаж іде туди, де його бачив."""
+        if isinstance(tool, Tool):
+            where = storage if storage is not None else tool._where
+            if not isinstance(where, Storage):
+                raise ValueError("невідомо, на якому складі лежить цей інструмент: me.take(інструмент, склад)")
+            return _kn.act("take", where._id, {"tool": tool._kind, "tool_id": tool._id})
+        if storage is None:
+            raise TypeError("me.take(Axe, склад): вкажіть склад, з якого взяти інструмент")
         return _kn.act("take", _id_of(storage, Storage, "take"), {"tool": _tool_kind(tool)})
 
     def put_back(self, storage):
@@ -654,6 +867,45 @@ class Me(Person):
         """Переселитися в збудований будинок (з запасним комплектом одягу)."""
         return _kn.act("move_into", _id_of(house, House, "move_into"), None)
 
+    def mow(self, meadow, amount=None, until=None, hours=None):
+        """Косити луг косою: сіно — в руки. Лише в теплу пору."""
+        return _kn.act("mow", _id_of(meadow, Meadow, "mow"), _limits(amount, until, hours))
+
+    def feed(self, animal, amount=None):
+        """Нагодувати тварину кормом із рук: корову — сіном, курку — зерном. Повертає кількість."""
+        aid = _id_of(animal, Animal, "feed")
+        p = {}
+        if amount is not None:
+            if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+                raise ValueError("feed(): amount= має бути додатним цілим числом")
+            p["amount"] = amount
+        return _kn.act("feed", aid, p)
+
+    def milk(self, cow):
+        """Подоїти корову: молоко — в руки. Повертає кількість (0 — молока ще немає)."""
+        return _kn.act("milk", _id_of(cow, Animal, "milk"), None)
+
+    def collect_eggs(self, chicken):
+        """Зібрати яйця курки в руки. Повертає кількість (0 — яєць немає)."""
+        return _kn.act("collect_eggs", _id_of(chicken, Animal, "collect_eggs"), None)
+
+    def slaughter(self, animal):
+        """Забити тварину: м'ясо — в руки, тварина зникає. Повертає кількість м'яса."""
+        return _kn.act("slaughter", _id_of(animal, Animal, "slaughter"), None)
+
+    def post(self, board, *objects):
+        """Записати на дошку оголошень, що персонаж знає про об'єкти (без об'єктів — про все, що знає).
+        Старіші записи замінюються новішими. Повертає, скільки записів оновлено."""
+        bid = _id_of(board, Board, "post")
+        if len(objects) == 1 and (isinstance(objects[0], list) or isinstance(objects[0], tuple)):
+            objects = objects[0]
+        ids = [_id_of(o, GameObject, "post") for o in objects]
+        return _kn.act("post", bid, {"objects": ids})
+
+    def read(self, board):
+        """Прочитати дошку оголошень: знання персонажа оновлюються новішими записами. Повертає, скільки нового."""
+        return _kn.act("read", _id_of(board, Board, "read"), None)
+
     def travel_time(self, obj):
         return Duration(_kn.travel_time(_id_of(obj, GameObject, "travel_time")))
 
@@ -675,9 +927,26 @@ def get(name):
 
 def buildings(kind):
     """Список будівель заданого типу: buildings(Storage)."""
-    if kind is not Storage and kind is not House and kind is not Forest and kind is not Field:
-        raise TypeError("buildings() приймає тип: Storage, House, Forest або Field")
+    if kind not in (Storage, House, Forest, Field, Board, Barn, Meadow):
+        raise TypeError("buildings() приймає тип: Storage, House, Forest, Field, Board, Barn або Meadow")
     return [_wrap(info) for info in _kn.list_objects(kind._kind)]
+
+
+def animals(kind=None):
+    """Тварини поселення: animals(), animals(Cow), animals(Chicken). Забитих у списку немає."""
+    if kind is None:
+        kind = Animal
+    if kind not in (Animal, Cow, Chicken):
+        raise TypeError("animals() приймає тип: Cow або Chicken")
+    return [_wrap(info) for info in _kn.list_objects(kind._kind)]
+
+
+def tools(kind=None, free=False):
+    """Інструменти, про які персонаж знає: на складах (такими, якими бачив їх востаннє) і свій.
+    tools(Axe) — лише сокири; free=True — лише цілі й не зарезервовані, що лежать на складі.
+    Найкраща: max(tools(Axe, free=True), key=lambda a: a.condition)."""
+    k = "" if kind is None else _tool_kind(kind)
+    return [_tool_from(info) for info in _kn.list_tools(k, bool(free))]
 
 
 def notify(text):
@@ -798,13 +1067,14 @@ _kn.set_dispatch(_dispatch, _check)
 # ------------------------------------------------------------------ export + sandbox
 
 __all__ = [
-    "Duration", "TimeOfDay", "time", "hours", "minutes",
+    "Duration", "TimeOfDay", "Moment", "time", "hours", "minutes",
     "world", "Event", "EventInfo", "Season",
     "ActionError", "NoItemError", "ReservedError", "TooHeavyError", "NoHomeError", "NotFoundError",
-    "WorkplaceBusyError", "Building",
-    "Tool", "Axe", "Sickle", "Clothes", "WarmClothes",
-    "GameObject", "Storage", "House", "Forest", "Field", "Person", "Me", "me",
-    "get", "buildings", "notify", "on", "off",
+    "WorkplaceBusyError", "ToolBrokenError", "Building",
+    "Tool", "Axe", "Sickle", "Scythe", "Clothes", "WarmClothes",
+    "GameObject", "Storage", "House", "Forest", "Field", "Board", "Barn", "Meadow", "Person", "Me", "me",
+    "Animal", "Cow", "Chicken",
+    "get", "buildings", "animals", "tools", "notify", "on", "off",
 ]
 
 for _name in __all__:

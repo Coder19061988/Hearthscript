@@ -11,10 +11,12 @@ const BUILTINS := [
 	"tuple", "enumerate", "zip", "sorted", "isinstance", "round", "any", "all", "callable",
 ]
 const API := [
-	"me", "world", "get", "buildings", "time", "hours", "minutes", "notify", "on", "off", "Event", "Season",
-	"Axe", "Sickle", "Clothes", "WarmClothes", "Storage", "House", "Forest", "Field",
+	"me", "world", "get", "buildings", "animals", "tools", "time", "hours", "minutes", "notify", "on", "off", "Event",
+	"Season", "Axe", "Sickle", "Scythe", "Tool", "Clothes", "WarmClothes", "Storage", "House", "Forest", "Field", "Board",
+	"Barn", "Meadow", "Animal", "Cow", "Chicken",
+	"Building", "GameObject", "Person", "Me", "Duration", "TimeOfDay", "Moment", "EventInfo",
 	"ActionError", "NoItemError", "ReservedError", "TooHeavyError", "NoHomeError", "NotFoundError",
-	"WorkplaceBusyError", "Building",
+	"WorkplaceBusyError", "ToolBrokenError",
 ]
 
 

@@ -8,6 +8,9 @@
 #                       if world.season == Season.WINTER:
 #                           keep_fire(NIGHT_FIREWOOD)
 # З цим кодом поселення переживає першу зиму (тест mvp_winter_survival).
+#
+# Обмежене знання: персонаж бачить склад, поле чи піч лише стоячи біля них, а пам'ятає таким,
+# яким бачив востаннє. Тому кожна роль спершу йде подивитися, а вже потім вирішує.
 
 storage = get("Склад_1")
 house = get("Будинок_1")
@@ -17,6 +20,7 @@ field = get("Поле_1")
 SEEDS = 10           # зерно, яке завжди лишається на посів
 BREAD_STOCK = 30     # пекарка пече, поки на складі менше хліба
 NIGHT_FIREWOOD = 8   # стільки дров має бути в печі на зимову ніч (одна одиниця горить 2 год)
+WOOD_STOCK = 120     # більше дров не рубати: сокири зношуються, а нових не зробити
 
 
 # ---- правила для всіх
@@ -49,7 +53,12 @@ def dress_for_season():
 
 def keep_fire(units):
     """Докласти дров у піч, щоб їх було щонайменше units."""
-    need = min(int(units - house.firewood) + 1, storage.amount("wood"))
+    me.go_to(house)  # скільки дров у печі, видно лише в будинку
+    need = int(units - house.firewood) + 1
+    if need <= 0:
+        return
+    me.go_to(storage)
+    need = min(need, storage.amount("wood"))
     if need > 0:
         me.pick_up(storage, "wood", need)
         me.heat(house)
@@ -58,8 +67,11 @@ def keep_fire(units):
 # ---- ролі: кожна виконує одне завдання й повертає True, якщо щось зробила
 
 def woodcutter():
+    me.go_to(storage)  # глянути, чи ще потрібні дрова
+    if storage.amount("wood") >= WOOD_STOCK:
+        return False
     try:
-        me.take(Axe, storage)
+        me.take(Axe, storage)  # найкраща ціла вільна сокира
     except (NoItemError, ReservedError) as e:
         notify(f"Без сокири: {e.reason}")
         return False
@@ -67,11 +79,15 @@ def woodcutter():
         me.chop_wood(forest, until=time(18, 0))
     except TooHeavyError:
         pass
+    except ToolBrokenError as e:
+        notify(f"Зламалася сокира, нарубано {e.done}")
     me.drop(storage)
+    me.put_back(storage)  # і зламану — на склад, щоб руки були вільні
     return True
 
 
 def baker():
+    me.go_to(storage)  # глянути на запаси
     grain = storage.amount("grain") - SEEDS
     if storage.amount("bread") >= BREAD_STOCK or grain <= 0:
         return False
@@ -86,7 +102,11 @@ def baker():
 def farmer():
     # Пече лише пекарка: якби фермерка теж брала зерно, обидві могли б одночасно
     # побачити «зайве» зерно на складі й разом забрати те, що лишали на посів.
-    if field.state == "empty" and world.season == Season.WARM and storage.amount("grain") >= SEEDS:
+    me.go_to(field)  # стан поля видно лише на полі
+    if field.state == "empty" and world.season == Season.WARM:
+        me.go_to(storage)
+        if storage.amount("grain") < SEEDS:
+            return False
         me.pick_up(storage, "grain", SEEDS)
         me.sow(field)
         return True
@@ -96,7 +116,10 @@ def farmer():
             me.harvest(field, until=time(19, 0))
         except TooHeavyError:
             pass
+        except ToolBrokenError as e:
+            notify(f"Зламався серп, зібрано {e.done}")
         me.drop(storage)
+        me.put_back(storage)
         return True
     return False
 

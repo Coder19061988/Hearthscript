@@ -3,7 +3,8 @@ extends SceneTree
 ## Run: Godot_v4.6.2-stable_win64_console.exe --path godot --script res://tests/screenshot.gd -- out=C:/tmp/shot.png hours=3
 ## Arguments after "--": out=<png path>, hours=<game hours to advance before the shot>, help=1 (open the F1 window),
 ## construction=1 (a house blueprint that two characters build), save_dialog=1 (open the save dialog),
-## outcome=won|lost (the end-of-game window: the first winter survived / everyone starved).
+## outcome=won|lost (the end-of-game window: the first winter survived / everyone starved),
+## animals=1 (a barn with a cow and four chickens).
 
 const BUILDERS := """storage = get("Склад_1")
 forest = get("Ліс_1")
@@ -26,7 +27,7 @@ me.move_into(site)
 var _main: Node
 var _frames := 0
 var _args := {"out": "user://screenshot.png", "hours": "3", "help": "0", "construction": "0", "save_dialog": "0",
-	"outcome": ""}
+	"outcome": "", "animals": "0"}
 
 
 func _initialize() -> void:
@@ -41,6 +42,12 @@ func _initialize() -> void:
 func _process(_delta: float) -> bool:
 	_frames += 1
 	if _frames == 5:
+		if _args["animals"] == "1":
+			var options: Dictionary = _main.START_OPTIONS.duplicate()
+			options.merge({"barn": true, "cows": 1, "chickens": 4}, true)
+			_main.sim.start(options)
+			_main.sim.set_shared_code(_main.start_shared_code, false)
+			_main._show_world()
 		if _args["outcome"] != "":
 			var won: bool = _args["outcome"] == "won"
 			var options := {"characters": 4, "random_rain": false}

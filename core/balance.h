@@ -25,6 +25,8 @@ struct Balance {
 
     // Action durations, game minutes
     double tool_take_minutes = 1.0;          // take / put_back
+    double tool_wear_per_hour = 2.5;         // % of condition per hour of work (chop / harvest); ~4 days of 10 h
+    double tool_worn_warning = 25.0;         // the log warns once the condition drops below this, %
     double transfer_base_minutes = 1.0;      // pick_up / drop
     double transfer_per_unit_minutes = 0.2;
     double chop_minutes_per_unit = 20.0;
@@ -111,6 +113,44 @@ struct Balance {
     double field_build_hours = 4.0;        // ploughing, no materials
     double move_in_minutes = 10.0;
     double blueprint_min_distance = 25.0;  // meters to other buildings (forest: + its radius)
+
+    // Animals (cows and chickens live in a barn), the meadow and hay
+    double animal_hunger_per_hour = 2.5;         // in winter: they live on stored feed
+    double animal_graze_per_hour = 5.0;          // warm season: grazing lowers hunger
+    double animal_hunger_damage_threshold = 80.0;
+    double animal_hunger_damage_per_hour = 1.5;
+    double animal_health_regen_per_hour = 1.0;
+    double animal_produce_max_hunger = 50.0;     // milk and eggs only while fed
+    double cow_hay_relief = 10.0;                // hunger per unit of hay
+    double chicken_grain_relief = 60.0;          // hunger per unit of grain
+    double cow_milk_per_day = 4.0;
+    double cow_milk_max = 8.0;
+    double chicken_eggs_per_day = 1.0;
+    double chicken_eggs_max = 3.0;
+    double cow_meat = 20.0;
+    double chicken_meat = 2.0;
+    double slaughter_minutes_per_meat = 4.0;
+    double milk_minutes_per_unit = 5.0;
+    double meadow_hay_max = 60.0;
+    double meadow_regrow_days = 4.0;             // from empty to full, warm season only
+    double mow_minutes_per_unit = 10.0;
+    double barn_build_wood = 30.0;
+    double barn_build_hours = 8.0;
+    double barn_capacity = 8.0;
+    double hay_kg = 2.0;
+    double milk_kg = 1.0;
+    double eggs_kg = 0.1;
+    double meat_kg = 1.0;
+    double meat_hunger_relief = 30.0;
+    double milk_hunger_relief = 15.0;
+    double eggs_hunger_relief = 10.0;
+
+    // Notice board (limited knowledge: characters share what they saw)
+    double board_build_wood = 5.0;
+    double board_build_hours = 1.0;
+    double board_post_minutes_per_note = 1.0;  // me.post: per note written (at least one)
+    double board_read_base_minutes = 1.0;      // me.read: looking at the board
+    double board_read_per_note_minutes = 0.2;  // me.read: per note that was news
 
     // Loads a flat JSON object {"key": number, ...}; keys starting with "_" are comments.
     // Returns false and sets `error` when the file can't be read or parsed.

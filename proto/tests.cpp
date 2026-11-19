@@ -24,6 +24,7 @@ struct Opts {
     int chars = 1;
     int axes = 1;
     int sickles = 0;
+    int scythes = 0;
     int bread = 10;
     int grain = 0;
     int wood = 0;
@@ -38,8 +39,9 @@ struct Opts {
 Opts mvp_opts() {
     Opts o;
     o.chars = 4;
-    o.axes = 2;
+    o.axes = 3;  // two woodcutters + a spare: axes wear out and can't be repaired yet
     o.sickles = 2;
+    o.scythes = 1;
     o.bread = 40;
     o.grain = 30;
     o.random_rain = true;
@@ -60,6 +62,7 @@ public:
         scene.characters = o.chars;
         scene.axes = o.axes;
         scene.sickles = o.sickles;
+        scene.scythes = o.scythes;
         scene.bread = o.bread;
         scene.grain = o.grain;
         scene.trees = o.trees;
@@ -116,6 +119,13 @@ std::string hours_str(double seconds) {
 
 Object& obj(World& w, const char* name) { return *w.object(w.find(name)->id); }
 
+// Tools of a kind lying in a storage; `reserved_only` counts those promised to someone on the way.
+int tools_of(const Object& s, const std::string& kind, bool reserved_only = false) {
+    int n = 0;
+    for (const ToolItem& t : s.tools) n += t.kind == kind && (!reserved_only || t.reserved_by >= 0) ? 1 : 0;
+    return n;
+}
+
 double dist(World& w, int a, int b) {
     Vec2 p = w.objects()[a].pos, q = w.objects()[b].pos;
     return std::hypot(p.x - q.x, p.y - q.y);
@@ -153,7 +163,7 @@ notify("готово")
     ctx.check(s.runtime().state(hero) == AgentState::Finished, "стан коду — «завершився»");
     Object& st = obj(w, "Склад_1");
     ctx.check(st.resources["wood"] == 3, "на складі 3 дрова");
-    ctx.check(st.tools["axe"] == 1 && st.tools_reserved["axe"] == 0, "сокира повернулась на склад");
+    ctx.check(tools_of(st, "axe") == 1 && tools_of(st, "axe", true) == 0, "сокира повернулась на склад");
     if (fin) {
         ctx.info("кінець: " + w.format_time(fin->time));
         ctx.check(time_in(fin, at(1, 8, 30), at(1, 10)), "тривалість правдоподібна (кінець між 08:30 і 10:00)");
@@ -439,9 +449,9 @@ notify("B: одиниця готова")
         s.runtime().set_code(hero, "me.take(Axe, get(\"Склад_1\"))\n");
         s.run_for(30, 30);
         Object& st = obj(w, "Склад_1");
-        ctx.check(st.tools_reserved["axe"] == 1, "під час take() сокира зарезервована");
+        ctx.check(tools_of(st, "axe", true) == 1, "під час take() сокира зарезервована");
         s.runtime().set_code(hero, "pass\n");
-        ctx.check(st.tools_reserved["axe"] == 0 && st.tools["axe"] == 1, "після зміни коду резерв знято");
+        ctx.check(tools_of(st, "axe", true) == 0 && tools_of(st, "axe") == 1, "після зміни коду резерв знято");
     }
 }
 
@@ -703,6 +713,10 @@ const TestCase kTests[] = {
     {"rules", "правила: @on(lambda: умова), @on(time(...)), off()", t_rules},
     {"rule_priority", "правила коду персонажа мають пріоритет над спільними", t_rule_priority},
     {"outcome", "кінець гри: першу зиму пережито / усі загинули", t_outcome},
+    {"knowledge", "обмежене знання: бачить лише на місці, пам'ятає старе", t_knowledge},
+    {"board", "дошка оголошень: me.post / me.read", t_board},
+    {"tool_wear", "знос інструментів: ToolBrokenError, tools(...), take(інструмент)", t_tool_wear},
+    {"animals", "тварини: хлів, сіно, молоко, яйця, забій, зима", t_animals},
 };
 
 }  // namespace

@@ -150,7 +150,7 @@ void t_field_cycle(Ctx& ctx) {
 storage = get("Склад_1")
 field = get("Поле_1")
 house = get("Будинок_1")
-assert field.state == "empty"
+assert field.state == "unknown", field.state  # обмежене знання: поля ще не бачив
 me.pick_up(storage, "grain", 10)
 me.sow(field)
 assert field.state == "sown", field.state
@@ -162,6 +162,7 @@ def eat():
 
 while not field.is_ripe:
     eat()
+    me.go_to(field)  # стиглість видно лише на полі
     me.rest(hours=2)
 assert field.grain_left == 80, field.grain_left
 me.take(Sickle, storage)
@@ -220,7 +221,7 @@ me.pick_up(storage, "grain", 10)
 assert me.grind(house, amount=2) == 2
 expect(lambda: me.bake(house), NoItemError, "хліб у холодній печі")
 me.take(Sickle, storage)
-assert me.tool == Sickle
+assert isinstance(me.tool, Sickle)
 expect(lambda: me.harvest(field), NoItemError, "жнива недозрілого поля")
 assert house.has(WarmClothes)
 assert buildings(Field) == [field]
@@ -289,6 +290,301 @@ void t_mvp_winter_survival(Ctx& ctx) {
     ctx.check(w.winters_survived() == 1 && outcome && outcome->kind == LogKind::Outcome &&
                   outcome->text.find("Вижило 4 з 4") != std::string::npos && outcome->time == at(16, 0),
               "гра оголосила: першу зиму пережито (о 00:00 першого теплого дня)");
+}
+
+// ------------------------------------------------------------------ limited knowledge, notice board
+
+// A character knows an object only as it saw it last, standing at it; at the start — only its house.
+void t_knowledge(Ctx& ctx) {
+    Opts o;
+    o.chars = 2;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    std::string err;
+    ctx.check(w.add_blueprint(ObjKind::House, "Будинок_2", {200, 100}, err) >= 0, "креслення: " + err);
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+house = get("Будинок_1")
+assert house.known_at is not None and house.known_ago == minutes(0), house.known_at  # свій будинок — зі старту
+assert get("Марта").known_at is not None  # сусідку по будинку теж бачить
+assert storage.known_at is None and storage.known_ago is None and storage.amount("bread") == 0
+assert get("Поле_1").state == "unknown" and get("Ліс_1").trees_left == 0
+site = get("Будинок_2")
+assert site.needs == {"wood": 40} and site.known_at is not None  # креслення гравця знають усі
+assert storage.is_built  # збудованість — публічна
+
+me.go_to(storage)
+assert storage.amount("bread") == 10 and storage.known_ago == minutes(0)
+seen = storage.known_at
+assert isinstance(seen, Moment) and seen.day == 1 and seen <= world.now
+me.go_to(house)
+me.wait_until(time(9, 0))  # о 08:00 Марта бере хліб, але звідси цього не видно
+assert storage.amount("bread") == 10, "пам'ятає старе"
+# Останній погляд — коли пішов від складу (персонаж оглядається на початку й наприкінці кожної дії).
+assert storage.known_at - seen < minutes(1) and storage.known_ago >= hours(3), storage.known_ago
+me.go_to(storage)
+assert storage.amount("bread") == 9
+notify("знання оновлено")
+assert me.wait_until(lambda: storage.amount("bread") < 9, timeout=hours(3))  # біля складу бачить зміни наживо
+notify("бачив, як забрали хліб")
+)PY");
+    s.runtime().set_code(w.char_obj_id(1), R"PY(
+storage = get("Склад_1")
+me.wait_until(time(8, 0))
+me.pick_up(storage, "bread", 1)
+me.eat("bread")
+me.wait_until(time(10, 0))
+me.pick_up(storage, "bread", 1)
+me.eat("bread")
+)PY");
+    s.run_until(at(1, 12));
+    ctx.check(find_log(w, "знання оновлено").has_value(), "знання старіють, доки персонаж не подивиться знову");
+    ctx.check(find_log(w, "бачив, як забрали хліб").has_value(), "біля об'єкта персонаж бачить зміни одразу");
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// Characters share what they saw through the notice board; a note never overwrites fresher knowledge.
+void t_board(Ctx& ctx) {
+    Opts o;
+    o.chars = 2;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+board = get("Дошка_1")
+field = get("Поле_1")
+assert board in buildings(Board) and board.is_built
+me.go_to(field)
+assert field.state == "empty"
+assert me.post(board, field) == 1
+assert me.post(board, field) == 0  # новішого нічого немає
+notify("записав поле")
+me.go_to(field)
+assert me.read(board) == 0 and field.known_ago < minutes(10)  # свіже знання старим записом не затирається
+assert me.post(board) >= 2  # без об'єктів — усе, що знає: поле (новіше), будинок, сусідку
+notify("записав усе")
+)PY");
+    s.runtime().set_code(w.char_obj_id(1), R"PY(
+board = get("Дошка_1")
+field = get("Поле_1")
+me.wait_until(time(8, 0))
+assert field.state == "unknown"
+assert me.read(board) == 1  # нове для неї лише поле: будинок вона бачить сама, а запис про неї саму не потрібен
+assert field.state == "empty" and field.known_ago > hours(1), field.known_ago  # знає те, що бачив Остап
+notify("прочитала дошку")
+)PY");
+    s.run_until(at(1, 10));
+    ctx.check(find_log(w, "записав поле").has_value() && find_log(w, "записав усе").has_value(),
+              "me.post записує знання на дошку");
+    ctx.check(find_log(w, "прочитала дошку").has_value(), "me.read передає знання іншому персонажу");
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+
+    const std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "знання й записи на дошці зберігаються: " + err);
+    if (loaded) {
+        Character& marta = loaded->world().character(w.char_obj_id(1));
+        ctx.check(marta.known.count(w.find("Поле_1")->id) == 1, "після завантаження Марта пам'ятає поле");
+    }
+}
+
+// ------------------------------------------------------------------ tools wear out
+
+// An axe wears with work (~40 h), warns when worn, breaks with ToolBrokenError (e.done = units of the
+// interrupted action); a broken tool stays broken in the storage. tools(...) lists what the character knows.
+void t_tool_wear(Ctx& ctx) {
+    Opts o;
+    o.axes = 2;
+    o.bread = 40;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+forest = get("Ліс_1")
+assert tools(Axe) == []  # склад ще не бачив
+me.go_to(storage)
+axes = tools(Axe, free=True)
+assert len(axes) == 2, axes
+for a in axes:
+    assert a.quality == 1 and a.condition == 100 and not a.is_broken and a.where == storage, a
+first = axes[0]
+me.take(first)
+assert isinstance(me.tool, Axe) and me.tool == first, me.tool
+assert len(tools(Axe, free=True)) == 1 and len(tools(Axe)) == 2  # своя в руках теж у списку
+
+def eat():
+    if me.hunger > 40:
+        me.pick_up(storage, "bread", 1)
+        me.eat("bread")
+
+broke = None
+while broke is None:
+    if not (time(6, 0) <= world.time < time(20, 0)):
+        me.sleep(until=time(6, 0))
+        continue
+    eat()
+    try:
+        me.chop_wood(forest)  # до повних рук
+    except ToolBrokenError as e:
+        broke = e.done
+        assert 0 <= e.done < 10, e.done
+    me.drop(storage)
+notify(f"сокира зламалася, в останньому рейсі нарубано {broke}")
+
+assert me.tool.is_broken and me.tool.condition == 0, me.tool
+try:
+    me.chop_wood(forest)
+    assert False, "зламаною не рубають"
+except ToolBrokenError:
+    pass
+try:
+    me.take(Axe, storage)
+    assert False, "руки зайняті зламаною"
+except ActionError:
+    pass
+me.put_back(storage)
+assert len(tools(Axe, free=True)) == 1 and len([a for a in tools(Axe) if a.is_broken]) == 1
+try:
+    me.take(first)  # саме ту — а вона зламана
+    assert False
+except ToolBrokenError:
+    pass
+me.take(Axe, storage)  # найкраща ціла
+assert me.tool.condition == 100 and me.tool != first
+notify("знос ok")
+)PY");
+    s.run_until(at(7, 12), 120);
+    auto broke = find_log(w, "сокира зламалася");
+    if (broke) ctx.info(broke->text + " — " + w.format_time(broke->time));
+    ctx.check(find_log(w, "майже зношений").has_value(), "журнал попереджає, що сокира майже зношена");
+    ctx.check(find_log(w, "зламався інструмент").has_value(), "журнал записує поломку");
+    ctx.check(find_log(w, "знос ok").has_value(), "зламаний інструмент: ToolBrokenError, put_back, take іншого");
+    const int wood = obj(w, "Склад_1").resources["wood"];
+    ctx.info("нарубано дров однією сокирою: " + std::to_string(wood));
+    ctx.check(wood >= 100 && wood <= 140, "сокира живе ~40 год рубки (~120 дров)");
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+
+    const std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "стан інструментів зберігається: " + err);
+    if (loaded) {
+        int broken = 0;
+        for (const ToolItem& t : loaded->world().object(w.find("Склад_1")->id)->tools) broken += t.broken() ? 1 : 0;
+        ctx.check(broken == 1, "після завантаження зламана сокира лишається зламаною");
+    }
+}
+
+// ------------------------------------------------------------------ animals
+
+void t_animals(Ctx& ctx) {
+    {
+        // Warm season: animals graze; hay, milk, eggs, meat. Animals live only in a barn.
+        Opts o;
+        o.scythes = 1;
+        o.bread = 20;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        std::string err;
+        const int barn = w.add_barn("Хлів_1", {-60, 60});
+        for (const char* species : {"cow", "chicken", "chicken"})
+            ctx.check(w.add_animal(species, barn, err) >= 0, std::string("тварина в хліві: ") + err);
+        ctx.check(w.add_animal("cow", w.find("Склад_1")->id, err) < 0, "тварина живе лише в хліві: " + err);
+        s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+meadow = get("Луг_1")
+barn = get("Хлів_1")
+cow = get("Корова_1")
+assert isinstance(cow, Cow) and cow in animals(Cow) and len(animals(Chicken)) == 2 and len(animals()) == 3
+assert cow.home == barn and len(barn.animals) == 3 and barn.free_places == 5, barn.animals
+assert cow.known_at is None and cow.milk == 0  # у хліві ще не був
+me.go_to(barn)
+assert cow.known_at is not None and cow.is_alive and cow.hunger == 0 and cow.health == 100
+try:
+    me.milk(animals(Chicken)[0])
+    assert False, "курку не доять"
+except ActionError:
+    pass
+
+me.take(Scythe, storage)
+assert me.mow(meadow, amount=10) == 10 and meadow.hay_left == 50, meadow.hay_left
+me.drop(storage)
+me.put_back(storage)
+me.pick_up(storage, "bread", 1)
+me.eat("bread")
+me.sleep(until=time(6, 0))
+
+me.go_to(barn)
+milk = me.milk(cow)
+assert 3 <= milk <= 5, milk  # 4 на добу
+assert me.milk(cow) == 0  # уже видоєно
+eggs = 0
+for c in animals(Chicken):
+    eggs += me.collect_eggs(c)
+assert eggs == 2, eggs  # по яйцю на добу
+hunger = me.hunger
+me.eat("milk")
+me.eat("eggs")
+assert me.hunger < hunger
+chicken = animals(Chicken)[0]
+assert me.slaughter(chicken) == 2 and me.carrying.get("meat") == 2, me.carrying
+assert chicken not in animals() and len(barn.animals) == 2
+me.eat("meat")
+notify("тварини ok")
+)PY");
+        s.run_until(at(2, 12));
+        ctx.check(find_log(w, "тварини ok").has_value(), "косіння, молоко, яйця й забій працюють");
+        ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+        ctx.check(obj(w, "Склад_1").resources["hay"] == 10, "накошене сіно — на складі");
+    }
+    {
+        // Winter: a fed cow is fine; a starving one dies of hunger.
+        Opts o;
+        o.start_day = 11;  // зима
+        o.start_hour = 6;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        std::string err;
+        const int barn = w.add_barn("Хлів_1", {-60, 60});
+        const int fed = w.add_animal("cow", barn, err);
+        const int starving = w.add_animal("cow", barn, err);
+        w.object(starving)->hunger = 95;
+        w.object(starving)->health = 5;
+        obj(w, "Склад_1").resources["hay"] = 20;
+        s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+cow = get("Корова_1")
+me.wait_until(time(18, 0))
+me.pick_up(storage, "hay", 6)
+me.go_to(cow)
+assert 25 <= cow.hunger <= 35, cow.hunger  # 12 год зими: +2,5 за годину
+assert me.feed(cow) == 3 and cow.hunger < 1, cow.hunger  # з'їла стільки, скільки треба
+assert me.carrying == {"hay": 3}, me.carrying
+assert me.feed(cow) == 0  # уже не голодна
+dead = get("Корова_2")
+assert not dead.is_alive
+try:
+    me.feed(dead)
+    assert False, "мертву не годують"
+except ActionError:
+    pass
+notify("нагодовано")
+)PY");
+        s.run_until(at(12, 6));
+        ctx.check(find_log(w, "нагодовано").has_value(), "me.feed годує сіном із рук");
+        ctx.check(find_log(w, "Корова_2» голодує").has_value(), "журнал попереджає, що тварина голодує");
+        auto death = find_log(w, "Смерть тварини «Корова_2»: голод");
+        if (death) ctx.info(death->text + " — " + w.format_time(death->time));
+        ctx.check(death.has_value(), "некормлена тварина гине від голоду");
+        const Object& kept = *w.object(fed);
+        ctx.info("Корова_1: здоров'я " + std::to_string(int(kept.health)) + ", голод " + std::to_string(int(kept.hunger)));
+        ctx.check(kept.alive && kept.health > 99 && kept.hunger > 25 && kept.hunger < 35, "нагодована тварина здорова");
+        ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+
+        const std::string text = save_game(s);
+        auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+        ctx.check(loaded && save_game(*loaded) == text, "стан тварин зберігається: " + err);
+    }
 }
 
 // The end of the game: the first winter survived (once, survives save/load) or everyone dead.
@@ -547,7 +843,7 @@ void t_save_load(Ctx& ctx) {
         const Character& a = w.characters()[i];
         const Character& b = lw.characters()[i];
         same_people = a.name == b.name && a.hunger == b.hunger && a.warmth == b.warmth && a.home == b.home &&
-                      a.carrying == b.carrying && a.tool == b.tool && lw.objects()[b.obj].pos.x == w.objects()[a.obj].pos.x;
+                      a.carrying == b.carrying && a.tool.id == b.tool.id && a.tool.condition == b.tool.condition &&lw.objects()[b.obj].pos.x == w.objects()[a.obj].pos.x;
     }
     ctx.check(same_people, "персонажі відновлені: потреби, речі, дім, позиція");
     ctx.check(loaded->runtime().shared_code() == shared &&

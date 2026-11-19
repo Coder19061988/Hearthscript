@@ -3,14 +3,24 @@ extends Node3D
 ## The simulation works in meters on a plane; SCALE converts them to scene units (x, z).
 ## Building meshes stand a little north of their point, so characters at the "door" stay visible.
 ## Every building has its own root node; it is rebuilt when the building changes (blueprint -> built).
+## Walls, wood piles and tree trunks are "solid" for the first-person observer (keep_walkable).
 
 const SCALE := 0.2
+const GROUND_CENTER := Vector3(6.0, 0.0, 20.0)
+const GROUND_SIZE := 300.0
 const BUILDING_OFFSET := Vector3(0.0, 0.0, -4.0)
 const HOUSE_SIZE := Vector3(5.0, 3.2, 5.0)
 const STORAGE_SIZE := Vector3(6.0, 4.0, 5.0)
+const BOARD_SIZE := Vector3(3.0, 2.6, 0.5)
+const BARN_SIZE := Vector3(7.0, 3.6, 5.0)
+const MEADOW_SIZE := 12.0
+## Animals stand in a row in front of their barn; a slot per animal. Their names are listed on the barn's label.
+const ANIMAL_SPACING := 1.0
 const FOREST_TREES := 70
 const FOREST_CLEARING := 3.0
 const FOREST_RADIUS := 12.0
+## The observer bumps into a tree this far from its trunk (× tree size): close enough to walk through the forest.
+const TREE_SOLID_RADIUS := 0.5
 const FIELD_SIZE := 9.0
 const FIELD_ROWS := 6
 const FIELD_PLANTS := 8
@@ -27,10 +37,14 @@ const ACTION_SHORT := {
 	"sleep": "спить", "rest": "відпочиває", "wait": "чекає", "heat": "топить піч",
 	"wear": "переодягається", "sow": "сіє", "harvest": "жне", "grind": "меле", "bake": "пече",
 	"deliver": "несе на будову", "build": "будує", "move_into": "переселяється",
+	"post": "пише на дошці", "read": "читає дошку",
+	"mow": "косить", "feed": "годує", "milk": "доїть", "collect_eggs": "збирає яйця", "slaughter": "забиває",
 }
 const CARGO_COLORS := {"wood": Color(0.62, 0.42, 0.22), "grain": Color(0.9, 0.78, 0.4),
-	"flour": Color(0.95, 0.93, 0.85), "bread": Color(0.75, 0.5, 0.25)}
-const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "зерно", "flour": "борошно"}
+	"flour": Color(0.95, 0.93, 0.85), "bread": Color(0.75, 0.5, 0.25), "hay": Color(0.8, 0.75, 0.35),
+	"milk": Color(0.97, 0.97, 0.95), "eggs": Color(0.95, 0.9, 0.78), "meat": Color(0.7, 0.25, 0.22)}
+const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "зерно", "flour": "борошно",
+	"hay": "сіно", "milk": "молоко", "eggs": "яйця", "meat": "м'ясо"}
 
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -38,8 +52,9 @@ var _ground_material: StandardMaterial3D
 var _precipitation: CPUParticles3D
 var _precipitation_mode := ""
 var _materials := {}
-var _buildings := {}    # building id -> {key, root, label, ...kind-specific nodes}
+var _buildings := {}    # building id -> {key, root, label, solids, ...kind-specific nodes}
 var _people := {}       # character id -> {root, body, cargo, tool, hat, ring, label (2D tag)}
+var _animals := {}      # animal id -> {root, body}
 var _tags: CanvasLayer  # name tags of characters, drawn over the 3D view and under the UI
 var _ghost: MeshInstance3D
 
@@ -63,12 +78,12 @@ func _ready() -> void:
 
 	var ground := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(300.0, 300.0)
+	plane.size = Vector2(GROUND_SIZE, GROUND_SIZE)
 	ground.mesh = plane
 	_ground_material = StandardMaterial3D.new()
 	_ground_material.albedo_color = GRASS
 	ground.material_override = _ground_material
-	ground.position = Vector3(6.0, 0.0, 20.0)
+	ground.position = GROUND_CENTER
 	add_child(ground)
 
 	_precipitation = CPUParticles3D.new()
@@ -95,14 +110,18 @@ func build(buildings: Array) -> void:
 		p["root"].queue_free()
 		p["label"].queue_free()
 	_people.clear()
+	for a in _animals.values():
+		a["root"].queue_free()
+	_animals.clear()
 	_sync_buildings(buildings)
 
 
 ## Called every frame with fresh state from the simulation.
-func update_world(buildings: Array, characters: Array, time_of_day: float, raining: bool, winter: bool,
-		selected_id: int, camera: Camera3D) -> void:
+func update_world(buildings: Array, characters: Array, animals: Array, time_of_day: float, raining: bool,
+		winter: bool, selected_id: int, camera: Camera3D) -> void:
 	_update_sky(time_of_day, raining, winter)
 	_sync_buildings(buildings)
+	var in_barn := _animal_lines(animals)
 	for b in buildings:
 		var entry: Dictionary = _buildings[b["id"]]
 		if not b.get("built", true):
@@ -121,6 +140,19 @@ func update_world(buildings: Array, characters: Array, time_of_day: float, raini
 					trees[i].visible = i < visible_count
 			"field":
 				_update_field(entry, b)
+			"board":
+				_set_text(entry["label"], "%s\nзаписів: %d" % [b["name"], b["notes"]])
+				entry["paper"].visible = b["notes"] > 0
+			"barn":
+				var names: Array = in_barn.get(b["id"], [])
+				_set_text(entry["label"], "%s · тварин %d/%d%s" % [b["name"], b["animals"], b["capacity"],
+					"\n" + " · ".join(names) if not names.is_empty() else ""])
+			"meadow":
+				_set_text(entry["label"], "%s\nсіна: %d" % [b["name"], b["hay"]])
+				var grass: MeshInstance3D = entry["grass"]
+				grass.scale.y = maxf(0.05, float(b["hay"]) / maxf(1.0, b["hay_max"]))
+				grass.position.y = grass.scale.y * 0.3
+	_update_animals(animals)
 	var groups := {}  # rounded position -> number of characters already placed there
 	for i in characters.size():
 		var c: Dictionary = characters[i]
@@ -143,6 +175,24 @@ func pick_character(camera: Camera3D, screen_pos: Vector2) -> int:
 			best_dist = d
 			best = id
 	return best
+
+
+## The first-person observer (camera_rig.gd) at `pos` with `radius`: kept on the ground and moved out of walls,
+## wood piles and trees. Blueprints before construction starts, fields, meadows, characters and animals
+## let the observer through.
+func keep_walkable(pos: Vector3, radius: float) -> Vector3:
+	var half := GROUND_SIZE * 0.5 - radius
+	var p := Vector2(clampf(pos.x, GROUND_CENTER.x - half, GROUND_CENTER.x + half),
+		clampf(pos.z, GROUND_CENTER.z - half, GROUND_CENTER.z + half))
+	for entry in _buildings.values():
+		for solid in entry["solids"]:
+			if not (solid["node"] as Node3D).is_visible_in_tree():
+				continue  # a chopped tree, an empty wood pile, a blueprint not started yet
+			if solid.has("rect"):
+				p = _push_out_of_rect(p, solid["rect"], radius)
+			else:
+				p = _push_out_of_circle(p, solid["center"], solid["radius"] + radius)
+	return Vector3(p.x, pos.y, p.y)
 
 
 ## Point on the ground under the mouse, in simulation meters (null if the ray misses the ground).
@@ -187,7 +237,7 @@ func _sync_buildings(buildings: Array) -> void:
 func _create_building(b: Dictionary, key: String) -> Dictionary:
 	var root := Node3D.new()
 	add_child(root)
-	var entry := {"key": key, "root": root}
+	var entry := {"key": key, "root": root, "solids": []}
 	var kind: String = b["kind"]
 	var base := _to_scene(b["position"])
 	if not b.get("built", true):
@@ -200,18 +250,19 @@ func _create_building(b: Dictionary, key: String) -> Dictionary:
 			var size := _footprint(kind)
 			var center := base + BUILDING_OFFSET
 			_add_box(root, center + Vector3(0, size.y * 0.5, 0), size, BLUEPRINT, true)
-			entry["progress"] = _add_box(root, center, Vector3(size.x * 0.96, size.y, size.z * 0.96), Color(0.72, 0.55, 0.32))
+			entry["progress"] = _block(entry, _add_box(root, center, Vector3(size.x * 0.96, size.y, size.z * 0.96),
+				Color(0.72, 0.55, 0.32)))
 		entry["label"] = _add_label(root, base + BUILDING_OFFSET * 2.0 + Vector3(0, 7.0, 0), b["name"])
 		return entry
 	match kind:
 		"storage":
-			_add_box(root, base + BUILDING_OFFSET + Vector3(0, 2.0, 0), STORAGE_SIZE, Color(0.55, 0.38, 0.22))
+			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, 2.0, 0), STORAGE_SIZE, Color(0.55, 0.38, 0.22)))
 			_add_box(root, base + BUILDING_OFFSET + Vector3(0, 4.3, 0), Vector3(6.6, 0.6, 5.6), Color(0.4, 0.27, 0.16))
-			entry["pile"] = _add_box(root, base + BUILDING_OFFSET + Vector3(4.5, 0.0, 0.0), Vector3(2.0, 1.0, 3.0),
-				Color(0.62, 0.42, 0.22))
+			entry["pile"] = _block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(4.5, 0.0, 0.0),
+				Vector3(2.0, 1.0, 3.0), Color(0.62, 0.42, 0.22)))
 			entry["label"] = _add_label(root, base + BUILDING_OFFSET * 2.0 + Vector3(0, 8.0, 0), b["name"])
 		"house":
-			_add_box(root, base + BUILDING_OFFSET + Vector3(0, 1.6, 0), HOUSE_SIZE, Color(0.86, 0.78, 0.6))
+			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, 1.6, 0), HOUSE_SIZE, Color(0.86, 0.78, 0.6)))
 			var roof := MeshInstance3D.new()
 			var prism := PrismMesh.new()
 			prism.size = Vector3(5.8, 2.2, 5.8)
@@ -223,12 +274,37 @@ func _create_building(b: Dictionary, key: String) -> Dictionary:
 			entry["smoke"] = _add_smoke(root, base + BUILDING_OFFSET + Vector3(1.4, 6.0, 1.0))
 			entry["label"] = _add_label(root, base + BUILDING_OFFSET * 2.0 + Vector3(0, 8.5, 0), b["name"])
 		"forest":
-			entry["trees"] = _plant_forest(root, base)
+			entry["trees"] = _plant_forest(root, base, entry["solids"])
 			# Above the far edge of the forest, so it does not cover the characters in the clearing.
 			entry["label"] = _add_label(root, base + Vector3(-FOREST_RADIUS - 2.0, 4.0, 0), b["name"])
 		"field":
 			entry["plants"] = _make_field(root, base)
 			entry["label"] = _add_label(root, base + Vector3(-FIELD_SIZE * 0.5 - 2.0, 3.0, 0), b["name"])
+		"barn":
+			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, BARN_SIZE.y * 0.5, 0), BARN_SIZE,
+				Color(0.55, 0.22, 0.17)))
+			var roof := MeshInstance3D.new()
+			var prism := PrismMesh.new()
+			prism.size = Vector3(BARN_SIZE.x + 0.6, 2.0, BARN_SIZE.z + 0.6)
+			roof.mesh = prism
+			roof.material_override = _material(Color(0.35, 0.3, 0.28))
+			roof.position = base + BUILDING_OFFSET + Vector3(0, BARN_SIZE.y + 1.0, 0)
+			root.add_child(roof)
+			entry["label"] = _add_label(root, base + BUILDING_OFFSET + Vector3(0, BARN_SIZE.y + 3.2, 0), b["name"])
+		"meadow":
+			_add_box(root, base + Vector3(0, 0.02, 0), Vector3(MEADOW_SIZE, 0.04, MEADOW_SIZE), Color(0.5, 0.68, 0.3))
+			entry["grass"] = _add_box(root, base + Vector3(0, 0.3, 0), Vector3(MEADOW_SIZE * 0.9, 0.6, MEADOW_SIZE * 0.9),
+				Color(0.45, 0.72, 0.28))
+			entry["label"] = _add_label(root, base + Vector3(-MEADOW_SIZE * 0.5 - 2.0, 2.5, 0), b["name"])
+		"board":
+			var wood := Color(0.5, 0.35, 0.2)
+			for x in [-1.2, 1.2]:
+				_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(x, 1.3, 0), Vector3(0.25, 2.6, 0.25), wood))
+			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, 1.8, 0.05), Vector3(2.8, 1.4, 0.15),
+				Color(0.72, 0.56, 0.36)))
+			entry["paper"] = _add_box(root, base + BUILDING_OFFSET + Vector3(0, 1.8, 0.15), Vector3(2.2, 1.0, 0.04),
+				Color(0.95, 0.93, 0.85))
+			entry["label"] = _add_label(root, base + BUILDING_OFFSET + Vector3(0, 4.0, 0), b["name"])
 	return entry
 
 
@@ -255,9 +331,17 @@ func _update_storage(entry: Dictionary, b: Dictionary) -> void:
 	var res: Dictionary = b["resources"]
 	var tools: Dictionary = b["tools"]
 	var wood: int = res.get("wood", 0)
-	_set_text(entry["label"], "%s\nдрова %d · хліб %d · зерно %d · борошно %d\nсокир %d · серпів %d" % [
+	var broken: Dictionary = b["broken_tools"]
+	var broken_count: int = broken.get("axe", 0) + broken.get("sickle", 0) + broken.get("scythe", 0)
+	var farm := []  # products of the meadow and the barn, when there are any
+	for r in ["hay", "milk", "eggs", "meat"]:
+		if res.get(r, 0) > 0:
+			farm.append("%s %d" % [RESOURCE_NAMES[r], res[r]])
+	_set_text(entry["label"], "%s\nдрова %d · хліб %d · зерно %d · борошно %d%s\nсокир %d · серпів %d · кіс %d%s" % [
 		b["name"], wood, res.get("bread", 0), res.get("grain", 0), res.get("flour", 0),
-		tools.get("axe", 0), tools.get("sickle", 0)])
+		"\n" + " · ".join(farm) if not farm.is_empty() else "",
+		tools.get("axe", 0), tools.get("sickle", 0), tools.get("scythe", 0),
+		" · зламаних %d" % broken_count if broken_count > 0 else ""])
 	var pile: MeshInstance3D = entry["pile"]
 	pile.visible = wood > 0
 	pile.scale.y = clampf(wood / 60.0, 0.2, 5.0)
@@ -307,6 +391,10 @@ func _footprint(kind: String) -> Vector3:
 			return HOUSE_SIZE
 		"storage":
 			return STORAGE_SIZE
+		"board":
+			return BOARD_SIZE
+		"barn":
+			return BARN_SIZE
 		_:
 			return Vector3(FIELD_SIZE, 0.2, FIELD_SIZE)
 
@@ -361,6 +449,54 @@ func _update_person(c: Dictionary, index: int, slot: int, selected_id: int, came
 	if tag.visible:
 		tag.size = tag.get_minimum_size()
 		tag.position = camera.unproject_position(head) - Vector2(tag.size.x * 0.5, tag.size.y + slot * 20.0)
+
+
+## Animals in a row in front of their barn; dead ones lie on their side; slaughtered ones disappear.
+func _update_animals(animals: Array) -> void:
+	var seen := {}
+	var slots := {}  # barn id -> next slot
+	for a in animals:
+		var id: int = a["id"]
+		seen[id] = true
+		if not _animals.has(id):
+			_animals[id] = _make_animal(a["species"])
+		var entry: Dictionary = _animals[id]
+		var slot: int = slots.get(a["home"], 0)
+		slots[a["home"]] = slot + 1
+		var root: Node3D = entry["root"]
+		root.position = _to_scene(a["position"]) + Vector3(1.5, 0, (slot - 2) * ANIMAL_SPACING)
+		root.rotation.z = 0.0 if a["alive"] else PI * 0.5
+	for id in _animals.keys():
+		if not seen.has(id):
+			_animals[id]["root"].queue_free()
+			_animals.erase(id)
+
+
+func _make_animal(species: String) -> Dictionary:
+	var root := Node3D.new()
+	add_child(root)
+	var cow := species == "cow"
+	var body_size := Vector3(0.6, 0.6, 1.2) if cow else Vector3(0.25, 0.25, 0.3)
+	var color := Color(0.45, 0.3, 0.2) if cow else Color(0.95, 0.93, 0.88)
+	var body := _add_box(root, Vector3(0, body_size.y * 0.5 + (0.35 if cow else 0.1), 0), body_size, color)
+	var head := Vector3(0.35, 0.35, 0.4) if cow else Vector3(0.14, 0.14, 0.14)
+	_add_box(root, Vector3(0, body_size.y + (0.5 if cow else 0.18), body_size.z * 0.55), head, color.darkened(0.15))
+	return {"root": root, "body": body}
+
+
+## Barn id -> names of its animals for the barn's label, with "голодна" / "мертва" where it matters.
+func _animal_lines(animals: Array) -> Dictionary:
+	var lines := {}
+	for a in animals:
+		var text: String = a["name"]
+		if not a["alive"]:
+			text += " (мертва)"
+		elif a["hunger"] >= 80.0:
+			text += " (голодна)"
+		if not lines.has(a["home"]):
+			lines[a["home"]] = []
+		lines[a["home"]].append(text)
+	return lines
 
 
 func _status_text(c: Dictionary) -> String:
@@ -433,7 +569,8 @@ func _make_person() -> Dictionary:
 
 # ---------------------------------------------------------------- scenery
 
-func _plant_forest(parent: Node3D, center: Vector3) -> Array:
+## Trees around a clearing; each tree is also added to `solids` (it stops blocking once chopped and hidden).
+func _plant_forest(parent: Node3D, center: Vector3, solids: Array) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 42
 	var trees := []
@@ -463,6 +600,8 @@ func _plant_forest(parent: Node3D, center: Vector3) -> Array:
 		tree.add_child(crown)
 		parent.add_child(tree)
 		trees.append(tree)
+		solids.append({"node": tree, "center": Vector2(tree.position.x, tree.position.z),
+			"radius": TREE_SOLID_RADIUS * size})
 	return trees
 
 
@@ -553,6 +692,40 @@ func _set_precipitation(mode: String) -> void:
 
 func _to_scene(p: Vector2) -> Vector3:
 	return Vector3(p.x * SCALE, 0.0, p.y * SCALE)
+
+
+## Makes a box solid for the first-person observer (while it is visible). The box's root stands at the origin,
+## so its position is a scene position; only its height may be scaled.
+func _block(entry: Dictionary, box: MeshInstance3D) -> MeshInstance3D:
+	var size: Vector3 = (box.mesh as BoxMesh).size
+	entry["solids"].append({"node": box,
+		"rect": Rect2(box.position.x - size.x * 0.5, box.position.z - size.z * 0.5, size.x, size.z)})
+	return box
+
+
+## A circle of `radius` at `p` (ground plane x, z) moved out of `rect`: to the closest point, or through
+## the nearest side when its center is already inside.
+func _push_out_of_rect(p: Vector2, rect: Rect2, radius: float) -> Vector2:
+	var closest := p.clamp(rect.position, rect.end)
+	var away := p - closest
+	if away.length_squared() >= radius * radius:
+		return p
+	if away != Vector2.ZERO:
+		return closest + away.normalized() * radius
+	var exits := [Vector2(rect.position.x - radius, p.y), Vector2(rect.end.x + radius, p.y),
+		Vector2(p.x, rect.position.y - radius), Vector2(p.x, rect.end.y + radius)]
+	var best: Vector2 = exits[0]
+	for e: Vector2 in exits:
+		if p.distance_squared_to(e) < p.distance_squared_to(best):
+			best = e
+	return best
+
+
+func _push_out_of_circle(p: Vector2, center: Vector2, distance: float) -> Vector2:
+	var away := p - center
+	if away.length_squared() >= distance * distance:
+		return p
+	return center + (away.normalized() if away != Vector2.ZERO else Vector2.RIGHT) * distance
 
 
 func _add_box(parent: Node3D, pos: Vector3, size: Vector3, color: Color, transparent := false) -> MeshInstance3D:

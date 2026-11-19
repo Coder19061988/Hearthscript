@@ -24,7 +24,7 @@ public:
     godot::String load_balance_json(const godot::String& text);
     // New world with the start scene.
     // Options: characters, axes, sickles, bread, grain, wood, trees, warm_clothes, random_rain, seed;
-    // for tests: start_day (1..), start_hour, hunger, health.
+    // for tests: start_day (1..), start_hour, hunger, health; barn (a finished "Хлів_1") with cows, chickens.
     void start(const godot::Dictionary& options);
     bool is_started() const { return sim_ != nullptr; }
     // Advances the world by `game_seconds` (split into ticks of at most 60 s).
@@ -45,19 +45,30 @@ public:
     godot::Dictionary get_outcome() const;
 
     // [{id, kind, name, position: Vector2 (meters), ...}] plus, by kind:
-    //   storage: resources, tools; house: firewood, temperature, heated, chest, capacity, residents;
-    //   forest: trees_left, trees_total; field: state, growth, grain_left;
+    //   storage: resources, tools (whole, by kind), broken_tools; house: firewood, temperature, heated, chest, capacity, residents;
+    //   forest: trees_left, trees_total; field: state, growth, grain_left; board: notes (count);
+    //   barn: capacity, animals (count); meadow: hay, hay_max;
     //   every building: built, progress (0..1), needs (missing materials), materials_needed
     godot::Array get_buildings() const;
-    // [{id, name, position, alive, hunger, fatigue, health, warmth, tool, clothes, carrying, home, state,
+    // [{id, name, position, alive, hunger, fatigue, health, warmth, tool, tool_condition (%, -1 = none), clothes,
+    //   carrying, home, state,
     //   state_text, line, line_file ("own" / "shared" / ""), action, action_target, death_cause, death_time (-1 while alive), death_time_text}]
     godot::Array get_characters() const;
 
-    // Blueprint placed by the player: kind "house" / "storage" / "field", position in meters.
+    // Animals (slaughtered ones are gone): [{id, name, species ("cow" / "chicken"), position, home (barn id),
+    //   alive, hunger, health, produce (milk / eggs ready)}]
+    godot::Array get_animals() const;
+    // A new animal in a built barn with a free place (for trade); returns "" or why not.
+    godot::String add_animal(const godot::String& species, const godot::String& barn);
+
+    // Blueprint placed by the player: kind "house" / "storage" / "field" / "barn" / "board", position in meters.
     // Returns "" or the reason why it can't be placed.
     godot::String add_blueprint(const godot::String& kind, const godot::String& name, const godot::Vector2& position);
     // {"house": {"wood": 40, "hours": 16}, ...}
     godot::Dictionary get_build_costs() const;
+    // What the character knows about buildings, fields and forests (limited knowledge):
+    // [{name, kind, ago}] where ago = game seconds since it saw the object, -1 = never.
+    godot::Array get_knowledge(int character_id) const;
 
     // Player's global variables (bool / int / float / String). set_global returns "" or an error.
     godot::String set_global(const godot::String& name, const godot::Variant& value);

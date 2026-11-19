@@ -23,8 +23,9 @@ struct Vec2 {
     double x = 0, y = 0;
 };
 
-enum class ObjKind { Storage, House, Forest, Field, Person };
-const char* kind_name(ObjKind k);  // "storage", "house", "forest", "field", "person" (used by the Python prelude)
+enum class ObjKind { Storage, House, Forest, Field, Person, Board, Barn, Meadow, Animal };
+// "storage", "house", "forest", "field", "person", "board", "barn", "meadow", "animal" (Python prelude, saves)
+const char* kind_name(ObjKind k);
 
 enum class Season { Warm, Winter };
 const char* season_name(Season s);  // "WARM" / "WINTER" (values of Season.* in Python)
@@ -35,8 +36,8 @@ const char* field_state_name(FieldState s);  // "empty" / "sown" / "ripe"
 // What a character is doing during a slice of time; drives needs (see Balance).
 enum class Activity { Idle, Wait, Light, Heavy, Rest, SleepHome, SleepGround };
 
-// Saved as numbers: add new kinds only at the end.
 enum class LogKind { Info, Notify, Print, Warning, Error, Death, Outcome };  // Outcome: the first winter survived / all dead
+const char* log_kind_name(LogKind k);  // "info", "notify", "print", "warning", "error", "death", "outcome" (saves, Godot)
 
 struct LogEntry {
     double time = 0;
@@ -46,8 +47,20 @@ struct LogEntry {
     std::string detail;  // e.g. a full traceback
 };
 
+// One tool: lies in a storage or is held by a character. It wears with work and is broken at condition 0
+// (there is no repair yet). Kinds: "axe", "sickle"; an empty kind means "no tool".
+struct ToolItem {
+    int id = -1;
+    std::string kind;
+    int quality = 1;         // 1..5 (only 1 exists until tools can be made)
+    double condition = 100;  // %, 0 = broken
+    int reserved_by = -1;    // in a storage: the character on its way to take it
+    bool empty() const { return kind.empty(); }
+    bool broken() const { return !kind.empty() && condition <= 0; }
+};
+
 // Every named thing in the world. Kind-specific fields are unused for other kinds.
-// Items (tools, clothes) are identified by strings: "axe", "sickle", "clothes", "warm_clothes".
+// Clothes are identified by strings: "clothes", "warm_clothes".
 struct Object {
     int id = -1;
     ObjKind kind = ObjKind::Storage;
@@ -55,8 +68,7 @@ struct Object {
     Vec2 pos;
     // Storage
     std::map<std::string, int> resources;       // "wood", "bread", "grain", "flour"
-    std::map<std::string, int> tools;           // tool -> count lying in the storage
-    std::map<std::string, int> tools_reserved;  // part of `tools` promised to characters on their way
+    std::vector<ToolItem> tools;                // tools lying in the storage (whole and broken)
     // House: stove (heating and baking), chest, hand mill
     double firewood = 0;     // units of wood in the stove; it burns while > 0
     double temperature = 0;  // inside, °C
@@ -72,25 +84,56 @@ struct Object {
     int grain_left = 0;       // ripe grain still standing
     // Person
     int char_index = -1;
-    // Buildings (storage, house, field): a blueprint is a construction site until `built`
+    // Animal (cow / chicken): lives in its barn (`home`) and stands at it
+    std::string species;     // "cow" / "chicken"
+    int home = -1;
+    double hunger = 0;
+    double health = 100;
+    bool alive = true;       // a dead animal stays in the barn
+    bool removed = false;    // slaughtered: gone from the world
+    double produce = 0;      // cow: milk ready (units); chicken: eggs laid (units)
+    bool hunger_warned = false;
+    std::string death_cause;
+    // Meadow
+    double hay = 0;          // standing grass, units of hay; regrows in the warm season
+    // Buildings (storage, house, field, board, barn): a blueprint is a construction site until `built`
     bool built = true;
     std::map<std::string, int> materials_needed;
     std::map<std::string, int> materials_delivered;
     double build_done = 0;   // seconds of construction work done (shared by all builders)
     double build_total = 0;  // seconds of work needed
-    int capacity = 0;        // house: max residents
+    int capacity = 0;        // house: max residents; barn: max animals
     int mill_user = -1;      // house: character at the hand mill (one workplace)
     int oven_user = -1;      // house: character at the oven (one workplace)
 };
 
-bool is_building(ObjKind k);  // storage, house, field: can be placed as a blueprint
+bool is_building(ObjKind k);  // storage, house, field, board, barn: can be placed as a blueprint
+
+// What one sees of another character: needs and items (position, name and home are public).
+struct PersonView {
+    double hunger = 0, fatigue = 0, health = 0, warmth = 0;
+    bool alive = true;
+    ToolItem tool;
+    std::string clothes;
+    std::map<std::string, int> carrying;
+};
+
+// What a character knows about an object (limited knowledge, План_гри.md §1): a copy of its state
+// as seen at `time`. Characters see an object only while standing at it; the notice board passes
+// such notes between characters. Public facts (name, position, is_built, capacity, residents, home)
+// are not part of it.
+struct Knowledge {
+    double time = -1;  // game time of the observation
+    Object state;      // the object as it was (for a person: its Object)
+    PersonView person; // for a person
+};
 
 struct Character {
     int obj = -1;  // object id (position lives in the Object)
     std::string name;
     double hunger = 0, fatigue = 0, health = 100, warmth = 100;
     bool alive = true;
-    std::string tool;     // "" / "axe" / "sickle"
+    ToolItem tool;        // in hands (empty kind = none)
     std::string clothes;  // "" / "clothes" / "warm_clothes"
     std::map<std::string, int> carrying;
     int home = -1;  // house object id
@@ -100,6 +143,7 @@ struct Character {
     double last_action_time = 0;
     std::map<int, double> work_partial;  // forest/field id -> progress of the unit being gathered (0..1)
     std::vector<int> action_stack;       // active actions; more than one while an @on handler runs
+    std::map<int, Knowledge> known;      // object id -> what this character knows about it
     // Log bookkeeping
     bool idle_warned = false, hunger_warned = false, fatigue_warned = false, cold_warned = false;
     int health_warn_level = 100;
@@ -114,9 +158,11 @@ struct ActionParams {
     std::optional<double> seconds;   // wait: plain duration
     std::optional<double> timeout;   // wait: timeout, seconds
     std::string tool;
+    int tool_id = -1;  // take: a particular tool (-1 = the best whole one of `tool`)
     std::string item;  // clothes for wear()
     std::string resource;
     int count = 0;
+    std::vector<int> objects;  // post: what to write on the board (empty = everything the character knows)
 };
 
 // A failed action; `type` is the Python exception class name (NoItemError, ...).
@@ -150,6 +196,8 @@ enum class ActionKind {
     GoTo, Take, PutBack, ChopWood, Drop, PickUp, Eat, Sleep, Rest, Wait,
     Heat, Wear, Sow, Harvest, Grind, Bake,
     Deliver, Build, MoveInto,
+    Post, Read,
+    Mow, Feed, Milk, CollectEggs, Slaughter,
 };
 
 struct Action {
@@ -166,7 +214,7 @@ struct Action {
     double handle_total = 0;   // length of that phase
     bool noop = false;
     bool transferred = false;
-    bool reserved = false;     // holds a reservation of params.tool in `target`
+    bool reserved = false;     // holds a reservation of the tool params.tool_id in `target`
     double wait_target = kInf;
     double wait_timeout = kInf;
     bool wait_returns_bool = false;
@@ -183,13 +231,23 @@ public:
     const Balance& balance() const { return balance_; }
 
     // --- scene building (before the first tick)
+    // `tools`: how many new tools of each kind lie in the storage.
     int add_storage(const std::string& name, Vec2 pos, const std::map<std::string, int>& tools,
                     const std::map<std::string, int>& resources);
+    ToolItem make_tool(const std::string& kind);  // a new tool (quality 1, condition 100) with its own id
     int add_house(const std::string& name, Vec2 pos, const std::map<std::string, int>& chest);
     int add_forest(const std::string& name, Vec2 pos, int trees);
     int add_field(const std::string& name, Vec2 pos);
     int add_character(const std::string& name, int home, Vec2 pos, double hunger, double fatigue, double health);
+    int add_board(const std::string& name, Vec2 pos);
+    int add_barn(const std::string& name, Vec2 pos);    // a finished barn (scene; the game builds them)
+    int add_meadow(const std::string& name, Vec2 pos);  // full of grass
+    // A new animal ("cow" / "chicken") in a built barn with a free place — for trade (bought animals
+    // go straight into a barn) and tests. Named "Корова_N" / "Курка_N". Returns its id, or -1 and `error`.
+    int add_animal(const std::string& species, int barn, std::string& error);
     void set_start_time(double t);
+    // Start knowledge: every character knows what it sees where it stands (its house, housemates).
+    void init_knowledge();
     void set_random_rain(bool enabled) { random_rain_ = enabled; }
     void add_rain(double start, double end);
     // A blueprint placed by the player (any time): returns its id, or -1 and sets `error`.
@@ -216,6 +274,7 @@ public:
     int forest_trees_left(const Object& f) const;
     std::map<std::string, int> materials_missing(const Object& o) const;
     int residents_count(int house_id) const;  // living characters whose home is this house
+    int animals_count(int barn_id) const;     // living animals in this barn
     bool is_raining_at(double t) const;
     bool is_night_at(double t) const;
     Season season_at(double t) const;
@@ -224,11 +283,20 @@ public:
     double environment_temperature(const Character& c) const;  // inside a house or outside
     // An unheated house shelters from the cold (+house_shelter_bonus) but is never warmer than a heated one.
     double unheated_house_temperature(double t) const;
-    bool is_edible(const std::string& resource) const { return resource == "bread"; }
+    double food_relief(const std::string& resource) const;  // hunger one unit takes away; 0 = not food
     bool is_resource(const std::string& resource) const;
     double resource_kg(const std::string& resource) const;
     double resolve_time_of_day(double tod, double now) const;
     std::string format_time(double t) const;
+
+    // --- limited knowledge
+    // What `viewer` knows about object `obj_id`; refreshed first while the viewer stands at it.
+    // nullptr if the viewer has never seen it.
+    const Knowledge* knowledge(Character& viewer, int obj_id);
+    void observe(Character& c);                 // learn everything at the character's spot
+    bool sees(const Character& c, const Object& o) const;  // standing at it right now
+    void learn(Character& c, const Object& o);  // a fresh note about `o` in c's memory
+    const std::map<int, Knowledge>& board_notes(int board_id) const;  // notes on a notice board
 
     // --- outcome of the game (MVP goal: survive the first winter)
     int alive_count() const;
@@ -269,9 +337,15 @@ private:
     StepResult step_build(Action& a, Character& c, double budget);
     void complete_building(Object& o, int builder);
     StepResult step_recover(Action& a, Character& c, Activity act, double budget, double used);
+    StepResult step_action_impl(Action& a, Character& c, double budget);
+    StepResult step_board(Action& a, Character& c, double budget);
+    StepResult step_animal(Action& a, Character& c, double budget);  // feed, milk, collect eggs, slaughter
+    void update_animal(Object& a, double t0, double dt);
     void check_thresholds(Character& c);
     void die(Character& c, const std::string& cause);
     void winter_ended(double t);
+    ToolItem* tool_in(Object& storage, int tool_id);
+    bool wear_tool(Character& c, double seconds);  // returns true when the tool broke just now
 
     Balance balance_;
     std::mt19937_64 rng_;
@@ -287,6 +361,8 @@ private:
     std::vector<LogEntry> log_;
     std::map<std::string, GlobalValue> globals_;
     int winters_survived_ = 0;
+    std::map<int, std::map<int, Knowledge>> boards_;  // board id -> object id -> the note about it
+    int next_tool_id_ = 1;
 };
 
 }  // namespace kindle

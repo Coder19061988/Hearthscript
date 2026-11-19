@@ -28,18 +28,25 @@ struct ItemNames {
 ItemNames item_names(const std::string& item) {
     if (item == "axe") return {"сокири", "сокири"};
     if (item == "sickle") return {"серпа", "серпи"};
+    if (item == "scythe") return {"коси", "коси"};
     if (item == "warm_clothes") return {"теплого одягу", "теплий одяг"};
     if (item == "clothes") return {"звичайного одягу", "звичайний одяг"};
     return {"предмета", "предмети"};
 }
 
-bool is_tool(const std::string& tool) { return tool == "axe" || tool == "sickle"; }
+bool is_tool(const std::string& tool) { return tool == "axe" || tool == "sickle" || tool == "scythe"; }
+
+const char* species_ua(const std::string& species) { return species == "cow" ? "корова" : "курка"; }
 
 std::string resource_ua(const std::string& r) {
     if (r == "wood") return "дрова";
     if (r == "bread") return "хліб";
     if (r == "grain") return "зерно";
     if (r == "flour") return "борошно";
+    if (r == "hay") return "сіно";
+    if (r == "milk") return "молоко";
+    if (r == "eggs") return "яйця";
+    if (r == "meat") return "м'ясо";
     return r;
 }
 
@@ -88,6 +95,10 @@ const char* kind_name(ObjKind k) {
         case ObjKind::Forest: return "forest";
         case ObjKind::Field: return "field";
         case ObjKind::Person: return "person";
+        case ObjKind::Board: return "board";
+        case ObjKind::Barn: return "barn";
+        case ObjKind::Meadow: return "meadow";
+        case ObjKind::Animal: return "animal";
     }
     return "?";
 }
@@ -103,7 +114,23 @@ const char* field_state_name(FieldState s) {
     return "empty";
 }
 
-bool is_building(ObjKind k) { return k == ObjKind::Storage || k == ObjKind::House || k == ObjKind::Field; }
+const char* log_kind_name(LogKind k) {
+    switch (k) {
+        case LogKind::Info: return "info";
+        case LogKind::Notify: return "notify";
+        case LogKind::Print: return "print";
+        case LogKind::Warning: return "warning";
+        case LogKind::Error: return "error";
+        case LogKind::Death: return "death";
+        case LogKind::Outcome: return "outcome";
+    }
+    return "info";
+}
+
+bool is_building(ObjKind k) {
+    return k == ObjKind::Storage || k == ObjKind::House || k == ObjKind::Field || k == ObjKind::Board ||
+           k == ObjKind::Barn;
+}
 
 World::World(const Balance& balance, uint64_t seed) : balance_(balance), rng_(seed) {}
 
@@ -124,9 +151,41 @@ int World::add_object(ObjKind kind, const std::string& name, Vec2 pos) {
 int World::add_storage(const std::string& name, Vec2 pos, const std::map<std::string, int>& tools,
                        const std::map<std::string, int>& resources) {
     int id = add_object(ObjKind::Storage, name, pos);
-    objects_[id].tools = tools;
+    for (const auto& [kind, n] : tools)
+        for (int i = 0; i < n; ++i) objects_[id].tools.push_back(make_tool(kind));
     objects_[id].resources = resources;
     return id;
+}
+
+ToolItem World::make_tool(const std::string& kind) {
+    ToolItem t;
+    t.id = next_tool_id_++;
+    t.kind = kind;
+    return t;
+}
+
+ToolItem* World::tool_in(Object& storage, int tool_id) {
+    for (ToolItem& t : storage.tools)
+        if (t.id == tool_id) return &t;
+    return nullptr;
+}
+
+// Work wears the tool in hands: quality 1 lasts ~40 h of work (balance), better ones last longer.
+bool World::wear_tool(Character& c, double seconds) {
+    ToolItem& t = c.tool;
+    if (t.empty() || t.broken()) return false;
+    const Balance& b = balance_;
+    const double before = t.condition;
+    const double quality_factor = 1.0 + 0.25 * (t.quality - 1);
+    t.condition = std::max(0.0, t.condition - b.tool_wear_per_hour * seconds / 3600.0 / quality_factor);
+    const char* what = t.kind == "axe" ? "сокира" : (t.kind == "scythe" ? "коса" : "серп");
+    if (t.condition <= 0) {
+        log(c.obj, LogKind::Warning, quote(c.name) + ": зламався інструмент — " + what);
+        return true;
+    }
+    if (before >= b.tool_worn_warning && t.condition < b.tool_worn_warning)
+        log(c.obj, LogKind::Warning, quote(c.name) + ": " + what + " майже зношений (стан " + fmt_num(std::floor(t.condition)) + "%)");
+    return false;
 }
 
 int World::add_house(const std::string& name, Vec2 pos, const std::map<std::string, int>& chest) {
@@ -162,6 +221,54 @@ int World::add_character(const std::string& name, int home, Vec2 pos, double hun
     return id;
 }
 
+int World::add_board(const std::string& name, Vec2 pos) { return add_object(ObjKind::Board, name, pos); }
+
+int World::add_barn(const std::string& name, Vec2 pos) {
+    int id = add_object(ObjKind::Barn, name, pos);
+    objects_[id].capacity = static_cast<int>(std::lround(balance_.barn_capacity));
+    return id;
+}
+
+int World::add_meadow(const std::string& name, Vec2 pos) {
+    int id = add_object(ObjKind::Meadow, name, pos);
+    objects_[id].hay = balance_.meadow_hay_max;
+    return id;
+}
+
+int World::add_animal(const std::string& species, int barn, std::string& error) {
+    if (species != "cow" && species != "chicken") {
+        error = "Невідома тварина " + quote(species) + ": є корова (cow) і курка (chicken)";
+        return -1;
+    }
+    const Object* b = object(barn);
+    if (!b || b->kind != ObjKind::Barn) {
+        error = "Тварини живуть лише в хліві";
+        return -1;
+    }
+    if (!b->built) {
+        error = quote(b->name) + " ще не збудовано";
+        return -1;
+    }
+    if (animals_count(barn) >= b->capacity) {
+        error = "У хліві " + quote(b->name) + " немає вільного місця";
+        return -1;
+    }
+    const std::string prefix = species == "cow" ? "Корова_" : "Курка_";
+    int n = 1;
+    while (by_name_.count(prefix + std::to_string(n))) ++n;
+    const Vec2 pos = b->pos;
+    const int id = add_object(ObjKind::Animal, prefix + std::to_string(n), pos);
+    Object& a = objects_[id];
+    a.species = species;
+    a.home = barn;
+    return id;
+}
+
+void World::init_knowledge() {
+    for (Character& c : chars_)
+        if (c.alive) observe(c);
+}
+
 void World::set_start_time(double t) {
     now_ = t;
     for (auto& c : chars_) {
@@ -177,7 +284,7 @@ void World::add_rain(double start, double end) { rain_.push_back({start, end}); 
 int World::add_blueprint(ObjKind kind, const std::string& name, Vec2 pos, std::string& error) {
     const Balance& b = balance_;
     if (!is_building(kind)) {
-        error = "За кресленням можна збудувати будинок, склад або поле";
+        error = "За кресленням можна збудувати будинок, склад, поле, хлів або дошку оголошень";
         return -1;
     }
     if (name.empty() || name.size() > 60) {
@@ -210,9 +317,21 @@ int World::add_blueprint(ObjKind kind, const std::string& name, Vec2 pos, std::s
         what = "Склад";
         o.materials_needed["wood"] = static_cast<int>(std::lround(b.storage_build_wood));
         o.build_total = b.storage_build_hours * 3600.0;
+    } else if (kind == ObjKind::Barn) {
+        what = "Хлів";
+        o.materials_needed["wood"] = static_cast<int>(std::lround(b.barn_build_wood));
+        o.build_total = b.barn_build_hours * 3600.0;
+        o.capacity = static_cast<int>(std::lround(b.barn_capacity));
+    } else if (kind == ObjKind::Board) {
+        what = "Дошка оголошень";
+        o.materials_needed["wood"] = static_cast<int>(std::lround(b.board_build_wood));
+        o.build_total = b.board_build_hours * 3600.0;
     } else {
         o.build_total = b.field_build_hours * 3600.0;
     }
+    // The player's plan is announced to everyone: all know the new site as it is now.
+    for (Character& c : chars_)
+        if (c.alive) learn(c, o);
     std::string needs = describe(o.materials_needed);
     log(-1, LogKind::Info,
         std::string("Нове креслення: ") + what + " " + quote(name) + (needs.empty() ? "" : " (потрібно: " + needs + ")"));
@@ -237,8 +356,50 @@ Character& World::character(int obj_id) {
     return chars_.at(o.char_index);
 }
 
+// ---------------------------------------------------------------- limited knowledge
+
+void World::learn(Character& c, const Object& o) {
+    Knowledge& k = c.known[o.id];
+    k.time = c.local_time;
+    k.state = o;
+    if (o.kind == ObjKind::Person) {
+        const Character& p = chars_.at(o.char_index);
+        k.person = PersonView{p.hunger, p.fatigue, p.health, p.warmth, p.alive, p.tool, p.clothes, p.carrying};
+    }
+}
+
+bool World::sees(const Character& c, const Object& o) const { return o.id != c.obj && at(c, o.pos); }
+
+void World::observe(Character& c) {
+    for (const Object& o : objects_)
+        if (sees(c, o)) learn(c, o);
+}
+
+const Knowledge* World::knowledge(Character& viewer, int obj_id) {
+    const Object* o = object(obj_id);
+    if (!o) return nullptr;
+    if (sees(viewer, *o)) learn(viewer, *o);
+    auto it = viewer.known.find(obj_id);
+    return it == viewer.known.end() ? nullptr : &it->second;
+}
+
+const std::map<int, Knowledge>& World::board_notes(int board_id) const {
+    static const std::map<int, Knowledge> kNone;
+    auto it = boards_.find(board_id);
+    return it == boards_.end() ? kNone : it->second;
+}
+
 bool World::is_resource(const std::string& resource) const {
-    return resource == "wood" || resource == "bread" || resource == "grain" || resource == "flour";
+    return resource == "wood" || resource == "bread" || resource == "grain" || resource == "flour" ||
+           resource == "hay" || resource == "milk" || resource == "eggs" || resource == "meat";
+}
+
+double World::food_relief(const std::string& resource) const {
+    if (resource == "bread") return balance_.bread_hunger_relief;
+    if (resource == "meat") return balance_.meat_hunger_relief;
+    if (resource == "milk") return balance_.milk_hunger_relief;
+    if (resource == "eggs") return balance_.eggs_hunger_relief;
+    return 0;
 }
 
 double World::resource_kg(const std::string& resource) const {
@@ -246,6 +407,10 @@ double World::resource_kg(const std::string& resource) const {
     if (resource == "bread") return balance_.bread_kg;
     if (resource == "grain") return balance_.grain_kg;
     if (resource == "flour") return balance_.flour_kg;
+    if (resource == "hay") return balance_.hay_kg;
+    if (resource == "milk") return balance_.milk_kg;
+    if (resource == "eggs") return balance_.eggs_kg;
+    if (resource == "meat") return balance_.meat_kg;
     return 0;
 }
 
@@ -285,6 +450,12 @@ std::map<std::string, int> World::materials_missing(const Object& o) const {
 int World::residents_count(int house_id) const {
     int n = 0;
     for (const Character& c : chars_) n += c.alive && c.home == house_id ? 1 : 0;
+    return n;
+}
+
+int World::animals_count(int barn_id) const {
+    int n = 0;
+    for (const Object& o : objects_) n += o.kind == ObjKind::Animal && o.alive && !o.removed && o.home == barn_id ? 1 : 0;
     return n;
 }
 
@@ -438,7 +609,44 @@ void World::update_environment(double t0, double t1) {
                 o.grain_left = static_cast<int>(std::lround(b.field_yield_grain));
                 log(-1, LogKind::Info, "Поле " + quote(o.name) + " дозріло", {}, t1);
             }
+        } else if (o.kind == ObjKind::Meadow && season_at(t0) == Season::Warm) {
+            o.hay = std::min(b.meadow_hay_max,
+                             o.hay + b.meadow_hay_max * dt / (std::max(0.01, b.meadow_regrow_days) * kDay));
+        } else if (o.kind == ObjKind::Animal && o.alive && !o.removed) {
+            update_animal(o, t0, dt);
         }
+    }
+}
+
+// Warm season: animals are let out to graze and are never hungry; in winter they live on the feed
+// the characters bring. Hunger hurts, being fed heals; milk and eggs come only while fed.
+void World::update_animal(Object& a, double t0, double dt) {
+    const Balance& b = balance_;
+    const double h = dt / 3600.0;
+    if (season_at(t0) == Season::Warm)
+        a.hunger = std::max(0.0, a.hunger - b.animal_graze_per_hour * h);
+    else
+        a.hunger = std::min(100.0, a.hunger + b.animal_hunger_per_hour * h);
+
+    if (a.hunger >= b.animal_hunger_damage_threshold) {
+        a.health -= b.animal_hunger_damage_per_hour * h;
+        if (!a.hunger_warned) {
+            a.hunger_warned = true;
+            log(-1, LogKind::Warning, "Тварина " + quote(a.name) + " голодує — нагодуйте її (me.feed)", {}, t0 + dt);
+        }
+    } else if (a.hunger < b.animal_produce_max_hunger) {
+        a.health = std::min(100.0, a.health + b.animal_health_regen_per_hour * h);
+        a.hunger_warned = false;
+        const bool cow = a.species == "cow";
+        const double per_day = cow ? b.cow_milk_per_day : b.chicken_eggs_per_day;
+        const double max = cow ? b.cow_milk_max : b.chicken_eggs_max;
+        a.produce = std::min(max, a.produce + per_day * dt / kDay);
+    }
+    if (a.health <= 0) {
+        a.health = 0;
+        a.alive = false;
+        a.death_cause = "голод";
+        log(-1, LogKind::Death, "Смерть тварини " + quote(a.name) + ": голод", {}, t0 + dt);
     }
 }
 
@@ -624,6 +832,7 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
     BeginResult res;
     Character& c = character(char_obj);
     const Balance& b = balance_;
+    observe(c);  // a character sees where it stands whenever it starts an action
     auto fail = [&](const char* type, const std::string& reason) {
         res.error = ActionError{type, reason, 0};
         return res;
@@ -659,18 +868,44 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
         if (!is_tool(p.tool)) return fail("ActionError", "Невідомий інструмент");
         a.kind = ActionKind::Take;
         const ItemNames names = item_names(p.tool);
-        if (c.tool == p.tool) {
-            a.noop = true;
-        } else if (!c.tool.empty()) {
-            return fail("ActionError", "Слот інструмента зайнятий: спершу поверніть інструмент (put_back)");
-        } else if (t->tools[p.tool] <= 0) {
-            return fail("NoItemError", "На складі " + quote(t->name) + " немає " + names.genitive);
-        } else if (t->tools[p.tool] - t->tools_reserved[p.tool] <= 0) {
-            return fail("ReservedError",
-                        std::string("Усі ") + names.plural + " на складі " + quote(t->name) + " зарезервували інші персонажі");
+        if (!c.tool.empty()) {
+            if (c.tool.kind == p.tool && !c.tool.broken() && (p.tool_id < 0 || p.tool_id == c.tool.id)) {
+                a.noop = true;
+            } else if (c.tool.broken()) {
+                return fail("ActionError", "У руках зламаний інструмент: спершу поверніть його на склад (put_back)");
+            } else {
+                return fail("ActionError", "Слот інструмента зайнятий: спершу поверніть інструмент (put_back)");
+            }
         } else {
-            t->tools_reserved[p.tool]++;
+            // A particular tool, or the best whole free one: higher quality, then better condition.
+            ToolItem* pick = nullptr;
+            if (p.tool_id >= 0) {
+                pick = tool_in(*t, p.tool_id);
+                if (!pick || pick->kind != p.tool)
+                    return fail("NoItemError", "Цього інструмента вже немає на складі " + quote(t->name));
+                if (pick->broken()) return fail("ToolBrokenError", "Цей інструмент зламаний");
+                if (pick->reserved_by >= 0 && pick->reserved_by != char_obj)
+                    return fail("ReservedError", "Цей інструмент уже зарезервував інший персонаж");
+            } else {
+                bool any = false, whole = false;
+                for (ToolItem& it : t->tools) {
+                    if (it.kind != p.tool) continue;
+                    any = true;
+                    if (it.broken()) continue;
+                    whole = true;
+                    if (it.reserved_by >= 0) continue;
+                    if (!pick || it.quality > pick->quality || (it.quality == pick->quality && it.condition > pick->condition))
+                        pick = &it;
+                }
+                if (!any) return fail("NoItemError", "На складі " + quote(t->name) + " немає " + names.genitive);
+                if (!whole) return fail("NoItemError", "На складі " + quote(t->name) + " лише зламані " + names.plural);
+                if (!pick)
+                    return fail("ReservedError",
+                                std::string("Усі ") + names.plural + " на складі " + quote(t->name) + " зарезервували інші персонажі");
+            }
+            pick->reserved_by = char_obj;
             a.reserved = true;
+            a.params.tool_id = pick->id;
         }
     } else if (kind == "put_back") {
         if (!require(ObjKind::Storage)) return fail("ActionError", "Інструмент можна повернути лише на склад");
@@ -679,8 +914,10 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
         a.kind = ActionKind::PutBack;
     } else if (kind == "chop_wood") {
         if (!require(ObjKind::Forest)) return fail("ActionError", "Рубати дрова можна лише в лісі");
-        if (c.tool != "axe")
+        if (c.tool.kind != "axe")
             return fail("NoItemError", "Щоб рубати дрова, потрібна сокира в руках (me.take(Axe, склад))");
+        if (c.tool.broken())
+            return fail("ToolBrokenError", "Сокира в руках зламана: поверніть її на склад (put_back) і візьміть іншу");
         if (carry_weight(c) + b.wood_kg > b.weight_limit_kg + kEps)
             return fail("TooHeavyError", "Руки повні: більше дров не піднести");
         if (forest_units_left(*t) <= 0) return fail("NoItemError", "У лісі " + quote(t->name) + " не лишилося дерев");
@@ -697,7 +934,7 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
         a.kind = ActionKind::PickUp;
     } else if (kind == "eat") {
         if (!is_resource(p.resource)) return fail("ActionError", "Невідомий ресурс " + quote(p.resource));
-        if (!is_edible(p.resource)) return fail("ActionError", quote(p.resource) + " не можна з'їсти");
+        if (food_relief(p.resource) <= 0) return fail("ActionError", quote(p.resource) + " не можна з'їсти");
         if (carried(p.resource.c_str()) < 1)
             return fail("NoItemError", quote(c.name) + " не несе " + quote(p.resource) + " — спершу візьміть зі складу (pick_up)");
         a.kind = ActionKind::Eat;
@@ -742,8 +979,10 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
     } else if (kind == "harvest") {
         if (!require(ObjKind::Field)) return fail("ActionError", "Жати можна лише на полі");
         if (unbuilt()) return fail_unbuilt();
-        if (c.tool != "sickle")
+        if (c.tool.kind != "sickle")
             return fail("NoItemError", "Для жнив потрібен серп у руках (me.take(Sickle, склад))");
+        if (c.tool.broken())
+            return fail("ToolBrokenError", "Серп у руках зламаний: поверніть його на склад (put_back) і візьміть інший");
         if (t->field_state != FieldState::Ripe || t->grain_left <= 0)
             return fail("NoItemError", "На полі " + quote(t->name) + " немає стиглого врожаю");
         if (carry_weight(c) + b.grain_kg > b.weight_limit_kg + kEps)
@@ -793,6 +1032,45 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
             a.noop = true;
         else if (residents_count(target) >= t->capacity)
             return fail("ActionError", "У будинку " + quote(t->name) + " немає вільних місць");
+    } else if (kind == "mow") {
+        if (!require(ObjKind::Meadow)) return fail("ActionError", "Косити можна лише на лузі");
+        if (c.tool.kind != "scythe")
+            return fail("NoItemError", "Щоб косити, потрібна коса в руках (me.take(Scythe, склад))");
+        if (c.tool.broken())
+            return fail("ToolBrokenError", "Коса в руках зламана: поверніть її на склад (put_back) і візьміть іншу");
+        if (season_at(now) == Season::Winter) return fail("ActionError", "Узимку трава під снігом — косити не можна");
+        if (carry_weight(c) + b.hay_kg > b.weight_limit_kg + kEps)
+            return fail("TooHeavyError", "Руки повні: більше сіна не піднести");
+        a.kind = ActionKind::Mow;
+    } else if (kind == "feed" || kind == "milk" || kind == "collect_eggs" || kind == "slaughter") {
+        if (!require(ObjKind::Animal) || t->removed) return fail("ActionError", "Це не тварина поселення");
+        if (!t->alive) return fail("ActionError", "Тварина " + quote(t->name) + " мертва");
+        const bool cow = t->species == "cow";
+        if (kind == "feed") {
+            const char* feed = cow ? "hay" : "grain";
+            if (carried(feed) < 1)
+                return fail("NoItemError", std::string("Щоб нагодувати: ") + (cow ? "корова їсть сіно" : "курка їсть зерно") +
+                                               " — візьміть його в руки (pick_up)");
+            if (p.amount && *p.amount <= 0) return fail("ActionError", "amount= має бути більшим за нуль");
+            a.kind = ActionKind::Feed;
+        } else if (kind == "milk") {
+            if (!cow) return fail("ActionError", "Доїти можна лише корову, а " + quote(t->name) + " — курка");
+            a.kind = ActionKind::Milk;
+        } else if (kind == "collect_eggs") {
+            if (cow) return fail("ActionError", "Яйця несуть кури, а " + quote(t->name) + " — корова");
+            a.kind = ActionKind::CollectEggs;
+        } else {
+            const int meat = static_cast<int>(std::lround(cow ? b.cow_meat : b.chicken_meat));
+            if (carry_weight(c) + meat * b.meat_kg > b.weight_limit_kg + kEps)
+                return fail("TooHeavyError", "Руки зайняті: м'ясо (" + std::to_string(meat) + " од.) не вміститься");
+            a.kind = ActionKind::Slaughter;
+        }
+    } else if (kind == "post" || kind == "read") {
+        if (!require(ObjKind::Board)) return fail("ActionError", "Писати й читати записи можна лише біля дошки оголошень");
+        if (unbuilt()) return fail_unbuilt();
+        for (int id : p.objects)
+            if (!object(id)) return fail("NotFoundError", "Такого об'єкта не існує");
+        a.kind = kind == "post" ? ActionKind::Post : ActionKind::Read;
     } else {
         return fail("ActionError", "Невідома дія " + quote(kind));
     }
@@ -800,6 +1078,7 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
     switch (a.kind) {
         case ActionKind::ChopWood:
         case ActionKind::Harvest:
+        case ActionKind::Mow:
         case ActionKind::Grind:
         case ActionKind::Bake:
         case ActionKind::Sow:
@@ -824,6 +1103,12 @@ BeginResult World::begin_action(int char_obj, const std::string& kind, int targe
 StepResult World::step_action(int action_id, double budget) {
     Action& a = actions_.at(action_id);
     Character& c = character(a.cid);
+    StepResult r = step_action_impl(a, c, budget);
+    if (r.status != StepStatus::Running && c.alive) observe(c);  // ...and when it finishes one
+    return r;
+}
+
+StepResult World::step_action_impl(Action& a, Character& c, double budget) {
     const Balance& b = balance_;
 
     switch (a.kind) {
@@ -840,10 +1125,12 @@ StepResult World::step_action(int action_id, double budget) {
             bool fin = false;
             used += handle(c, a, b.tool_take_minutes * 60.0, budget - used, Activity::Light, fin);
             if (!fin) return running(used);
-            s.tools[a.params.tool]--;
-            s.tools_reserved[a.params.tool]--;
+            auto it = std::find_if(s.tools.begin(), s.tools.end(), [&](const ToolItem& t) { return t.id == a.params.tool_id; });
             a.reserved = false;
-            c.tool = a.params.tool;
+            if (it == s.tools.end()) return failed(used, "NoItemError", "Цього інструмента вже немає на складі " + quote(s.name));
+            c.tool = *it;
+            c.tool.reserved_by = -1;
+            s.tools.erase(it);
             return done(used);
         }
         case ActionKind::PutBack: {
@@ -854,13 +1141,19 @@ StepResult World::step_action(int action_id, double budget) {
             used += handle(c, a, b.tool_take_minutes * 60.0, budget - used, Activity::Light, fin);
             if (!fin) return running(used);
             if (c.tool.empty()) return failed(used, "NoItemError", quote(c.name) + " не тримає інструмента");
-            s.tools[c.tool]++;
-            c.tool.clear();
+            s.tools.push_back(c.tool);  // a broken one too: it lies there until tools can be repaired
+            c.tool = ToolItem{};
             return done(used);
         }
         case ActionKind::ChopWood:
         case ActionKind::Harvest:
+        case ActionKind::Mow:
             return step_gather(a, c, budget);
+        case ActionKind::Feed:
+        case ActionKind::Milk:
+        case ActionKind::CollectEggs:
+        case ActionKind::Slaughter:
+            return step_animal(a, c, budget);
         case ActionKind::Grind:
         case ActionKind::Bake:
             return step_convert(a, c, budget);
@@ -868,6 +1161,9 @@ StepResult World::step_action(int action_id, double budget) {
             return step_sow(a, c, budget);
         case ActionKind::Build:
             return step_build(a, c, budget);
+        case ActionKind::Post:
+        case ActionKind::Read:
+            return step_board(a, c, budget);
         case ActionKind::Deliver: {
             Object& site = objects_[a.target];
             double used = walk(c, site.pos, budget);
@@ -1009,7 +1305,7 @@ StepResult World::step_action(int action_id, double budget) {
             if (it == c.carrying.end() || it->second < 1)
                 return failed(used, "NoItemError", quote(c.name) + " уже не несе " + quote(a.params.resource));
             if (--it->second == 0) c.carrying.erase(it);
-            c.hunger = std::max(0.0, c.hunger - b.bread_hunger_relief);
+            c.hunger = std::max(0.0, c.hunger - food_relief(a.params.resource));
             return done(used);
         }
         case ActionKind::Sleep: {
@@ -1044,14 +1340,117 @@ StepResult World::step_action(int action_id, double budget) {
     return failed(0, "ActionError", "Невідома дія");
 }
 
+// me.post / me.read at a notice board. Notes change hands on arrival, then the writing or reading takes time.
+// A note replaces an older one about the same object; nobody's fresher knowledge is overwritten.
+StepResult World::step_board(Action& a, Character& c, double budget) {
+    const Balance& b = balance_;
+    Object& board = objects_[a.target];
+    double used = walk(c, board.pos, budget);
+    if (!at(c, board.pos)) return running(used);
+    if (!a.transferred) {
+        if (!board.built) return failed(used, "ActionError", quote(board.name) + " ще не збудовано");
+        observe(c);
+        auto& notes = boards_[board.id];
+        int n = 0;
+        if (a.kind == ActionKind::Post) {
+            std::vector<int> ids = a.params.objects;
+            if (ids.empty())
+                for (const auto& [id, k] : c.known) ids.push_back(id);
+            for (int id : ids) {
+                const Object& o = objects_[id];
+                if (o.kind == ObjKind::Board) continue;  // a board's notes are read on the spot
+                if (id == c.obj) learn(c, o);            // one's own state is always known
+                auto mine = c.known.find(id);
+                if (mine == c.known.end() || mine->second.time < 0) continue;
+                auto note = notes.find(id);
+                if (note != notes.end() && note->second.time >= mine->second.time) continue;
+                notes[id] = mine->second;
+                ++n;
+            }
+            a.handle_total = b.board_post_minutes_per_note * std::max(1, n) * 60.0;
+        } else {
+            for (const auto& [id, note] : notes) {
+                if (id == c.obj) continue;
+                auto mine = c.known.find(id);
+                if (mine != c.known.end() && mine->second.time >= note.time) continue;
+                c.known[id] = note;
+                ++n;
+            }
+            a.handle_total = (b.board_read_base_minutes + b.board_read_per_note_minutes * n) * 60.0;
+        }
+        a.done = n;
+        a.transferred = true;
+    }
+    bool fin = false;
+    used += handle(c, a, a.handle_total, budget - used, Activity::Light, fin);
+    return fin ? done_int(used, a.done) : running(used);
+}
+
+// Feeding, milking, collecting eggs and slaughter: the character goes to the animal (in its barn), the
+// change happens on arrival, then the work takes time.
+StepResult World::step_animal(Action& a, Character& c, double budget) {
+    const Balance& b = balance_;
+    Object& animal = objects_[a.target];
+    double used = walk(c, animal.pos, budget);
+    if (!at(c, animal.pos)) return running(used);
+    if (!a.transferred) {
+        if (!animal.alive || animal.removed) return failed(used, "ActionError", "Тварина " + quote(animal.name) + " мертва");
+        const bool cow = animal.species == "cow";
+        int n = 0;
+        if (a.kind == ActionKind::Feed) {
+            const char* feed = cow ? "hay" : "grain";
+            const double relief = cow ? b.cow_hay_relief : b.chicken_grain_relief;
+            auto it = c.carrying.find(feed);
+            const int have = it == c.carrying.end() ? 0 : it->second;
+            if (have <= 0) return failed(used, "NoItemError", quote(c.name) + " уже не несе корму");
+            // As much as it eats: the hunger left is the smallest, without overfeeding.
+            const int wanted = static_cast<int>(std::floor(animal.hunger / relief + 0.5));
+            n = std::min(have, a.params.amount ? *a.params.amount : wanted);
+            n = std::max(0, n);
+            animal.hunger = std::max(0.0, animal.hunger - n * relief);
+            if ((it->second -= n) == 0) c.carrying.erase(it);
+            a.handle_total = n > 0 ? (b.transfer_base_minutes + b.transfer_per_unit_minutes * n) * 60.0 : 0.0;
+        } else if (a.kind == ActionKind::Milk || a.kind == ActionKind::CollectEggs) {
+            const char* product = cow ? "milk" : "eggs";
+            const double kg = resource_kg(product);
+            const int fits = static_cast<int>(std::floor((b.weight_limit_kg - carry_weight(c)) / kg + kEps));
+            n = std::min(static_cast<int>(std::floor(animal.produce + kEps)), std::max(0, fits));
+            if (n == 0 && animal.produce >= 1.0 - kEps)
+                return failed(used, "TooHeavyError", "Руки повні: " + resource_ua(product) + " не вміститься");
+            animal.produce = std::max(0.0, animal.produce - n);
+            if (n > 0) c.carrying[product] += n;
+            a.handle_total = cow ? b.milk_minutes_per_unit * 60.0 * n
+                                 : (n > 0 ? (b.transfer_base_minutes + b.transfer_per_unit_minutes * n) * 60.0 : 0.0);
+        } else {
+            n = static_cast<int>(std::lround(cow ? b.cow_meat : b.chicken_meat));
+            a.handle_total = b.slaughter_minutes_per_meat * 60.0 * n;
+        }
+        a.done = n;
+        a.transferred = true;
+    }
+    bool fin = false;
+    used += handle(c, a, a.handle_total, budget - used, Activity::Light, fin);
+    if (!fin) return running(used);
+    if (a.kind == ActionKind::Slaughter) {
+        if (!animal.alive || animal.removed) return failed(used, "ActionError", "Тварина " + quote(animal.name) + " мертва");
+        animal.alive = false;
+        animal.removed = true;
+        c.carrying["meat"] += a.done;
+        log(c.obj, LogKind::Info, quote(c.name) + " забиває тварину " + quote(animal.name) + ": м'яса " + std::to_string(a.done));
+    }
+    return done_int(used, a.done);
+}
+
 // Chopping wood in a forest or harvesting a ripe field: units go into the hands one by one.
 StepResult World::step_gather(Action& a, Character& c, double budget) {
     const Balance& b = balance_;
     const bool chop = a.kind == ActionKind::ChopWood;
+    const bool mow = a.kind == ActionKind::Mow;
     Object& src = objects_[a.target];
-    const char* resource = chop ? "wood" : "grain";
-    const double unit = chop ? b.chop_minutes_per_unit * 60.0
-                             : b.field_harvest_hours * 3600.0 / std::max(1.0, b.field_yield_grain);
+    const char* resource = chop ? "wood" : (mow ? "hay" : "grain");
+    const double unit = chop  ? b.chop_minutes_per_unit * 60.0
+                        : mow ? b.mow_minutes_per_unit * 60.0
+                              : b.field_harvest_hours * 3600.0 / std::max(1.0, b.field_yield_grain);
     double used = 0;
     for (;;) {
         if (!c.alive) return running(budget);
@@ -1063,9 +1462,15 @@ StepResult World::step_gather(Action& a, Character& c, double budget) {
             used += walk(c, src.pos, std::min(left, a.deadline - c.local_time));
             continue;
         }
-        const int units_left = chop ? forest_units_left(src) : (src.field_state == FieldState::Ripe ? src.grain_left : 0);
+        const int units_left = chop  ? forest_units_left(src)
+                               : mow ? static_cast<int>(std::floor(src.hay + kEps))
+                                     : (src.field_state == FieldState::Ripe ? src.grain_left : 0);
         if (units_left <= 0) {
             if (chop) return failed(used, "NoItemError", "У лісі " + quote(src.name) + " не лишилося дерев", a.done);
+            if (mow) {
+                if (a.done > 0) return done_int(used, a.done);
+                return failed(used, "NoItemError", "На лузі " + quote(src.name) + " трава ще не відросла", 0);
+            }
             // The field is harvested completely (by this character or by others): a natural end.
             if (a.done > 0) return done_int(used, a.done);
             return failed(used, "NoItemError", "На полі " + quote(src.name) + " немає стиглого врожаю", 0);
@@ -1084,12 +1489,15 @@ StepResult World::step_gather(Action& a, Character& c, double budget) {
         double t = std::min({left, a.deadline - c.local_time, need});
         pass_time(c, t, Activity::Heavy);
         used += t;
+        const bool broke = wear_tool(c, t);
         if (t >= need - kEps) {
             partial = 0;
             c.carrying[resource] += 1;
             a.done += 1;
             if (chop) {
                 src.wood_taken += 1;
+            } else if (mow) {
+                src.hay = std::max(0.0, src.hay - 1.0);
             } else if (--src.grain_left <= 0) {
                 src.grain_left = 0;
                 src.field_state = FieldState::Empty;
@@ -1099,6 +1507,12 @@ StepResult World::step_gather(Action& a, Character& c, double budget) {
         } else {
             partial = std::min(1.0, partial + t * factor / unit);
         }
+        if (broke)
+            return failed(used, "ToolBrokenError",
+                          std::string(chop ? "Сокира зламалася" : (mow ? "Коса зламалася" : "Серп зламався")) +
+                              ": зібрано " + std::to_string(a.done) +
+                              ". Поверніть зламаний інструмент на склад (put_back) і візьміть інший",
+                          a.done);
     }
 }
 
@@ -1246,7 +1660,8 @@ void World::end_action(int action_id) {
     if (it == actions_.end()) return;
     Action& a = it->second;
     if (a.reserved) {
-        if (Object* s = object(a.target)) s->tools_reserved[a.params.tool]--;
+        if (Object* s = object(a.target))
+            if (ToolItem* t = tool_in(*s, a.params.tool_id)) t->reserved_by = -1;
         a.reserved = false;
     }
     if (a.kind == ActionKind::Grind || a.kind == ActionKind::Bake) {

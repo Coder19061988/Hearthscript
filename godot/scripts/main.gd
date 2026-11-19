@@ -7,7 +7,7 @@ const CameraRig := preload("res://scripts/camera_rig.gd")
 const GameUI := preload("res://scripts/game_ui.gd")
 
 ## Start of the MVP game: 4 adults (MVP.md §3). proto/tests.cpp (mvp_opts) checks the same numbers.
-const START_OPTIONS := {"characters": 4, "axes": 2, "sickles": 2, "bread": 40, "grain": 30, "trees": 200,
+const START_OPTIONS := {"characters": 4, "axes": 3, "sickles": 2, "scythes": 1, "bread": 40, "grain": 30, "trees": 200,
 	"random_rain": true, "seed": 3}
 const BALANCE_PATH := "res://data/balance.json"
 ## Shared code of a new game (scripts/start_shared.py): settlers only eat and sleep; the player writes the rest.
@@ -15,7 +15,7 @@ const START_SHARED_CODE_PATH := "res://data/shared.py"
 const FALLBACK_SHARED_CODE := "def main():\n    while True:\n        me.sleep(until=time(6, 0))\n"
 ## A frame never advances more than this much real time (a hitch must not skip hours of game time).
 const MAX_FRAME_SECONDS := 0.25
-const BUILD_PREFIX := {"house": "Будинок", "storage": "Склад", "field": "Поле"}
+const BUILD_PREFIX := {"house": "Будинок", "storage": "Склад", "field": "Поле", "barn": "Хлів", "board": "Дошка"}
 ## Keep in sync with blueprint_min_distance in config/balance.json (the core makes the final check).
 const BLUEPRINT_MIN_DISTANCE := 25.0
 const FOREST_RADIUS_M := 60.0
@@ -41,9 +41,11 @@ func _ready() -> void:
 	world_view = WorldView.new()
 	add_child(world_view)
 	camera_rig = CameraRig.new()
+	camera_rig.obstacles = world_view.keep_walkable
 	add_child(camera_rig)
 	ui = GameUI.new()
 	add_child(ui)
+	ui.first_person_requested.connect(func() -> void: _set_first_person(true))
 	ui.speed_selected.connect(_set_speed)
 	ui.code_applied.connect(_on_code_applied)
 	ui.shared_code_applied.connect(_on_shared_code_applied)
@@ -97,6 +99,7 @@ func start_game() -> void:
 
 ## Rebuilds the view and the interface for the world that is in `sim` now (new game or a loaded one).
 func _show_world() -> void:
+	_set_first_person(false)
 	_stop_placing()
 	ui.hide_outcome()
 	var outcome: Dictionary = sim.get_outcome()
@@ -147,11 +150,12 @@ func _process(delta: float) -> void:
 	var buildings: Array = sim.get_buildings()
 	var characters: Array = sim.get_characters()
 	var winter: bool = sim.get_season() == "WINTER"
-	world_view.update_world(buildings, characters, sim.get_time_of_day(), sim.is_raining(), winter, selected_id,
-		camera_rig.camera)
+	world_view.update_world(buildings, characters, sim.get_animals(), sim.get_time_of_day(), sim.is_raining(), winter,
+		selected_id, camera_rig.camera)
 	ui.update_status(sim.get_time_text(), sim.is_raining(), sim.is_night(), winter, sim.get_season_days_left(),
 		sim.get_temperature(), buildings)
-	ui.update_character(_find_character(characters, selected_id))
+	ui.update_character(_find_character(characters, selected_id),
+		sim.get_knowledge(selected_id) if selected_id >= 0 else [])
 	ui.set_globals(sim.get_globals())
 	for entry in sim.take_log():
 		ui.add_log_entry(entry)
@@ -167,6 +171,7 @@ func check_outcome() -> void:
 		lost_shown = lost_shown or lost
 		survived_shown = survived_shown or survived
 		_set_speed(0.0)
+		_set_first_person(false)  # the window needs the mouse
 		ui.show_outcome(not lost, sim.get_characters(), sim.get_time_text())
 
 
@@ -179,6 +184,7 @@ func _on_outcome_closed(survived: bool) -> void:
 func _input(event: InputEvent) -> void:
 	# F1 works everywhere, including inside the code editor.
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F1:
+		_set_first_person(false)
 		ui.show_help()
 		get_viewport().set_input_as_handled()
 
@@ -199,10 +205,28 @@ func _unhandled_input(event: InputEvent) -> void:
 				_set_speed(3.0)
 			KEY_3:
 				_set_speed(10.0)
+			KEY_V:
+				_set_first_person(not camera_rig.first_person)
+			KEY_ESCAPE:
+				_set_first_person(false)
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		var id := world_view.pick_character(camera_rig.camera, event.position)
+		# First person: the mouse is captured, the character is picked under the crosshair (screen center).
+		var at: Vector2 = get_viewport().get_visible_rect().size * 0.5 if camera_rig.first_person else event.position
+		var id := world_view.pick_character(camera_rig.camera, at)
 		if id >= 0:
 			select_character(id)
+
+
+## First person: the player walks among the settlers (camera_rig.gd); the side panel and the log hide to free
+## the view. Only the view changes: the observer is not a character and the game goes on as before.
+func _set_first_person(on: bool) -> void:
+	if on == camera_rig.first_person:
+		return
+	if on:
+		_stop_placing()
+		get_viewport().gui_release_focus()  # WASD must walk, not type into the code editor
+	camera_rig.set_first_person(on)
+	ui.set_first_person(on)
 
 
 func select_character(id: int) -> void:
