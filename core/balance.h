@@ -22,6 +22,7 @@ struct WorkshopType {
     std::string name;                       // shown to the player: "Кузня"
     std::map<std::string, int> materials;  // brought to the construction site
     double hours = 0;                       // of construction work
+    bool stove = false;                     // heated like a house (the hospital): me.heat, temperature inside
 };
 
 // Tunable numbers of the prototype. Defaults mirror "Баланс_прототипу.md";
@@ -241,6 +242,114 @@ struct Balance {
     double field_water_days = 1.0;  // watering lasts
     double field_water_growth_bonus = 0.5;  // a watered field grows this much faster
     double field_rain_soak_hours = 6.0;  // rain waters the fields for this long after it
+
+    // Health: illness of the weakened, injuries at hard work, the hospital, herbs and bandages
+    double illness_hours = 72.0;  // an untreated illness lasts
+    double illness_treated_hours = 12.0;  // after treatment it ends in at most this
+    double illness_damage_per_hour = 1.0;  // health lost while sick and up (untreated)
+    double illness_rest_damage_per_hour = 0.2;  // ... while resting or sleeping
+    double illness_fatigue_per_hour = 2.0;  // extra fatigue while sick and up (untreated)
+    double illness_work_factor = 0.7;  // work speed while sick (untreated)
+    double illness_cold_per_hour = 0.03;  // chance per hour to fall ill while freezing (warmth below warmth_damage_threshold)
+    double illness_hunger_per_hour = 0.01;  // ... while starving (hunger >= hunger_damage_threshold)
+    double illness_exhaustion_per_hour = 0.01;  // ... while exhausted (fatigue >= fatigue_slow_threshold)
+    double illness_rain_per_hour = 0.003;  // ... while in the rain without a roof
+    double injury_hours = 120.0;  // an untreated injury heals in
+    double injury_treated_hours = 48.0;  // a bandaged one in at most this
+    double injury_work_factor = 0.5;  // work speed while injured
+    double injury_fatigue_threshold = 80.0;  // heavy work above this fatigue risks an injury
+    double injury_fatigue_per_hour = 0.02;  // chance per hour of heavy work when tired
+    double injury_dark_per_hour = 0.02;  // ... at night
+    double injury_mine_per_hour = 0.004;  // ... in the quarry or the mine
+    double injury_forge_per_hour = 0.003;  // ... at the forge
+    double herbs_minutes = 30.0;  // gathering a unit of herbs on a meadow (warm season)
+    double herbs_kg = 0.2;
+    double bandage_kg = 0.1;
+    double treat_minutes = 30.0;
+    double treat_herbs = 2.0;  // herbs to treat an illness (an injury takes a bandage)
+    double value_herbs = 2.0;
+    double value_bandage = 3.0;
+
+    // Mood: work and free time, needs, comfort, unburied bodies; the church: services and burials
+    double mood_start = 80.0;  // at the start of the game
+    double mood_heavy_per_hour = -0.6;  // mood per hour of heavy work
+    double mood_light_per_hour = -0.3;  // ... of light work and walking
+    double mood_rest_per_hour = 3.0;  // ... of free time (me.rest)
+    double mood_bed_per_hour = 0.5;  // ... of sleep in a bed (comfort)
+    double mood_ground_per_hour = -1.0;  // ... of sleep outside
+    double mood_hunger_per_hour = -2.0;  // while starving (hunger >= hunger_damage_threshold)
+    double mood_cold_per_hour = -2.0;  // while freezing (warmth below warmth_damage_threshold)
+    double mood_exhaustion_per_hour = -1.0;  // while exhausted (fatigue >= fatigue_slow_threshold)
+    double mood_ailment_per_hour = -1.0;  // while ill or injured
+    double mood_body_per_hour = -1.0;  // for every decaying unburied body in the settlement
+    double mood_low_threshold = 30.0;  // below this the work is slower
+    double mood_low_work_factor = 0.75;
+    double body_decay_hours = 24.0;  // an unburied body starts to decay after this
+    double illness_body_per_hour = 0.01;  // chance per hour to fall ill for every decaying body
+    double service_minutes = 60.0;  // a service in the church
+    double service_mood = 20.0;  // mood for everyone at the church when it ends
+    double service_interval_hours = 20.0;  // a church holds a service at most this often
+    double burial_minutes = 60.0;  // at the cemetery, after bringing the body
+
+    // Light: lanterns lit with oil every evening and torches; heavy work in the dark risks injuries
+    double lantern_build_wood = 3.0;
+    double lantern_build_hours = 1.0;
+    double lantern_radius_m = 40.0;  // a lit lantern lights the work around it at night
+    double lantern_oil_hours = 4.0;  // a unit of oil burns this long
+    double torch_hours = 2.0;  // a torch in the hands burns this long of heavy work at night
+    double light_minutes = 5.0;  // filling and lighting a lantern
+    double oil_kg = 1.0;
+    double torch_kg = 0.5;
+    double value_oil = 4.0;
+    double value_torch = 2.0;
+
+    // Food: perishables spoil in storages (slower in winter and in a cellar); smoked meat and cheese keep; the diet
+    double bread_spoil_per_day = 0.03;  // share of the stock that spoils a day in the warm season
+    double milk_spoil_per_day = 0.5;
+    double eggs_spoil_per_day = 0.1;
+    double meat_spoil_per_day = 0.25;
+    double smoked_meat_spoil_per_day = 0.01;
+    double cheese_spoil_per_day = 0.01;
+    double winter_spoil_factor = 0.3;  // in winter food spoils this much slower
+    double cellar_spoil_factor = 0.3;  // in a cellar too (both together in a cellar in winter)
+    double cellar_build_wood = 15.0;
+    double cellar_build_stone = 10.0;
+    double cellar_build_hours = 8.0;
+    double smoked_meat_kg = 0.8;
+    double cheese_kg = 1.0;
+    double smoked_meat_hunger_relief = 30.0;
+    double cheese_hunger_relief = 20.0;
+    double value_smoked_meat = 10.0;
+    double value_cheese = 8.0;
+    double diet_days = 7.0;  // the diet is what a character ate over this many days
+    double diet_variety_kinds = 3.0;  // this many kinds of food is a varied diet
+    double diet_variety_mood_per_hour = 0.1;
+    double diet_monotony_mood_per_hour = -0.1;  // one kind of food only (after the first diet_days of the game)
+
+    // Forestry: saplings from the nursery are planted where trees were cut and grow into trees
+    double sapling_kg = 1.0;
+    double plant_minutes = 10.0;  // planting a sapling
+    double tree_grow_days = 20.0;  // a sapling becomes a tree after this many warm-season days (~2 years)
+    double value_sapling = 1.0;
+
+    // Leisure: the bathhouse (fatigue, mood, fewer illnesses), beer from the brewery, the tavern (company, hangovers)
+    double bath_minutes = 60.0;  // a bath (counts as rest)
+    double bath_water = 2.0;  // buckets from the hands
+    double bath_fatigue = 30.0;  // fatigue a bath takes away
+    double bath_mood = 10.0;
+    double bath_clean_hours = 48.0;  // after a bath the chances to fall ill are lower this long
+    double bath_illness_factor = 0.5;
+    double bath_interval_hours = 20.0;  // a character bathes at most this often
+    double beer_kg = 1.0;
+    double beer_mood = 6.0;  // a mug at the tavern
+    double beer_hunger_relief = 5.0;
+    double drink_minutes = 20.0;  // a mug (counts as rest)
+    double hangover_beers = 3.0;  // this mug in one day brings a hangover
+    double hangover_hours = 12.0;
+    double hangover_work_factor = 0.8;
+    double injury_hangover_per_hour = 0.02;  // chance per hour of heavy work with a hangover
+    double tavern_rest_mood_per_hour = 2.0;  // extra mood while resting at a tavern (company)
+    double value_beer = 5.0;
 
     // Notice board (limited knowledge: characters share what they saw)
     double board_build_wood = 5.0;

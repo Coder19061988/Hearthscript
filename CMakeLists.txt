@@ -110,7 +110,7 @@ set(KINDLE_TESTS
   animals
   trade
   stats
-  craft clothes wood mining water)
+  craft clothes wood mining water ailments treatment mood church lighting food forestry leisure)
 foreach(t IN LISTS KINDLE_TESTS)
   add_test(NAME ${t} COMMAND kindle_proto test ${t})
 endforeach()

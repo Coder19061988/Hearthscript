@@ -170,6 +170,7 @@ struct RuntimeNatives {
     static const char* info_kind(const Object& o) {
         if (o.kind == ObjKind::Animal) return o.species.c_str();
         if (o.kind == ObjKind::Workshop) return o.workshop.c_str();
+        if (o.kind == ObjKind::Storage && o.cellar) return "cellar";
         return kind_name(o.kind);
     }
     static void make_info(py_OutRef out, const Object& o) {
@@ -214,11 +215,13 @@ struct RuntimeNatives {
         PY_CHECK_ARG_TYPE(0, tp_str);
         std::string kind = py_tostr(py_arg(0));
         py_newlist(py_r0());
-        const bool any_animal = kind == "animal", any_workshop = kind == "workshop";
+        const bool any_animal = kind == "animal", any_workshop = kind == "workshop", any_storage = kind == "storage";
+        const bool heated = kind == "heated_workshop";  // workshops with a stove
         for (const Object& o : world().objects()) {
             if (o.removed) continue;  // slaughtered animals are gone
             if (kind == info_kind(o) || (any_animal && o.kind == ObjKind::Animal) ||
-                (any_workshop && o.kind == ObjKind::Workshop))
+                (any_workshop && o.kind == ObjKind::Workshop) || (any_storage && o.kind == ObjKind::Storage) ||
+                (heated && o.kind == ObjKind::Workshop && world().has_stove(o)))
                 make_info(py_list_emplace(py_r0()), o);
         }
         py_assign(py_retval(), py_r0());
@@ -241,7 +244,10 @@ struct RuntimeNatives {
     static PersonView person_view(const Object* o) {
         if (o->id == agent()->char_obj) {
             const Character& c = me();
-            return PersonView{c.hunger, c.fatigue, c.health, c.warmth, c.alive, c.tool, c.clothes, c.carrying};
+            return PersonView{c.hunger,       c.fatigue,     c.health,          c.warmth,
+                              c.alive,        c.tool,        c.clothes,         c.carrying,
+                              c.illness_left, c.injury_left, c.illness_treated, c.injury_treated,
+                              c.mood};
         }
         const Knowledge* k = known(o);
         if (k) return k->person;
@@ -279,8 +285,100 @@ struct RuntimeNatives {
             py_newfloat(py_retval(), c.health);
         else if (key == "warmth")
             py_newfloat(py_retval(), c.warmth);
+        else if (key == "mood")
+            py_newfloat(py_retval(), c.mood);
+        else if (key == "alive")
+            py_newbool(py_retval(), world().character(o->id).alive);  // public: everyone knows of a death
+        else if (key == "sick")
+            py_newbool(py_retval(), c.illness_left > 0);
+        else if (key == "injured")
+            py_newbool(py_retval(), c.injury_left > 0);
+        else if (key == "needs_treatment")
+            py_newbool(py_retval(), (c.illness_left > 0 && !c.illness_treated) || (c.injury_left > 0 && !c.injury_treated));
         else
             return ValueError("невідома властивість '%s'", key.c_str());
+        return true;
+    }
+    // Dead people and animals not buried yet (public: everyone knows of a death).
+    static bool bodies(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(0);
+        py_newlist(py_r0());
+        for (const Object& o : world().objects())
+            if (world().is_body(o)) make_info(py_list_emplace(py_r0()), o);
+        py_assign(py_retval(), py_r0());
+        return true;
+    }
+    static bool lantern_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Lantern, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        const Object& l = known_state(o);
+        std::string key = py_tostr(py_arg(1));
+        if (key == "fuel")
+            py_newfloat(py_retval(), l.fuel);
+        else if (key == "lit")
+            py_newbool(py_retval(), l.lit);
+        else
+            return ValueError("невідома властивість '%s'", key.c_str());
+        return true;
+    }
+    static bool self_diet(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(0);
+        py_newlist(py_r0());
+        for (const std::string& food : world().diet(me())) py_newstr(py_list_emplace(py_r0()), food.c_str());
+        py_assign(py_retval(), py_r0());
+        return true;
+    }
+    static bool self_state(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(1);
+        PY_CHECK_ARG_TYPE(0, tp_str);
+        const Character& c = me();
+        std::string key = py_tostr(py_arg(0));
+        if (key == "clean")
+            py_newbool(py_retval(), c.clean_until > c.local_time);
+        else if (key == "hangover")
+            py_newbool(py_retval(), c.hangover_until > c.local_time);
+        else
+            return ValueError("невідома властивість '%s'", key.c_str());
+        return true;
+    }
+    static bool self_in_dark(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(0);
+        py_newbool(py_retval(), !world().lit_near(me()));
+        return true;
+    }
+    static bool church_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Workshop, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        const Object& ch = known_state(o);
+        std::string key = py_tostr(py_arg(1));
+        if (key == "graves")
+            py_newint(py_retval(), ch.graves);
+        else if (key == "service_ready")
+            py_newbool(py_retval(), ch.last_service < 0 ||
+                                        me().local_time >= ch.last_service + world().balance().service_interval_hours * 3600.0);
+        else
+            return ValueError("невідома властивість '%s'", key.c_str());
+        return true;
+    }
+    // People at this hospital who are ill or injured (as the character knows them); seen only from there.
+    static bool hospital_patients(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(1);
+        Object* h = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Workshop, false, &h)) return false;
+        py_newlist(py_r0());
+        if (world().hospital_at(me()) == h) {
+            for (const Character& p : world().characters()) {
+                const Object* po = world().object(p.obj);
+                if (!p.alive || world().hospital_at(p) != h) continue;
+                const PersonView v = person_view(po);
+                if (v.illness_left > 0 || v.injury_left > 0) make_info(py_list_emplace(py_r0()), *po);
+            }
+        }
+        py_assign(py_retval(), py_r0());
         return true;
     }
     // (id, kind, quality, condition, where) — `where` is the storage or the person holding it.
@@ -409,7 +507,8 @@ struct RuntimeNatives {
     static bool house_info(int argc, py_StackRef argv) {
         PY_CHECK_ARGC(2);
         Object* o = nullptr;
-        if (!obj_arg(py_arg(0), ObjKind::House, false, &o)) return false;
+        if (!obj_arg(py_arg(0), ObjKind::House, true, &o)) return false;
+        if (!world().has_stove(*o)) return TypeError("очікується будинок чи лікарня, а отримано %s", kind_name(o->kind));
         PY_CHECK_ARG_TYPE(1, tp_str);
         const Object& h = known_state(o);
         std::string key = py_tostr(py_arg(1));
@@ -615,6 +714,22 @@ struct RuntimeNatives {
             py_newstr(py_retval(), o->deposit.c_str());  // public: what is mined there
         else if (key == "left")
             py_newint(py_retval(), known(o) ? known_state(o).deposit_left : 0);
+        else
+            return ValueError("невідома властивість '%s'", key.c_str());
+        return true;
+    }
+    static bool forest_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Forest, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        std::string key = py_tostr(py_arg(1));
+        if (key == "saplings")
+            py_newint(py_retval(), known(o) ? static_cast<py_i64>(known_state(o).saplings.size()) : 0);
+        else if (key == "room")
+            py_newint(py_retval(), known(o) ? world().forest_room(known_state(o)) : 0);
+        else if (key == "capacity")
+            py_newint(py_retval(), o->capacity);  // public: the size of the forest
         else
             return ValueError("невідома властивість '%s'", key.c_str());
         return true;
@@ -950,6 +1065,14 @@ void ScriptRuntime::init_vm(Agent* a) {
     py_bindfunc(kn, "house_chest", RuntimeNatives::house_chest);
     py_bindfunc(kn, "char_clothes_condition", RuntimeNatives::char_clothes_condition);
     py_bindfunc(kn, "deposit_info", RuntimeNatives::deposit_info);
+    py_bindfunc(kn, "hospital_patients", RuntimeNatives::hospital_patients);
+    py_bindfunc(kn, "bodies", RuntimeNatives::bodies);
+    py_bindfunc(kn, "church_info", RuntimeNatives::church_info);
+    py_bindfunc(kn, "lantern_info", RuntimeNatives::lantern_info);
+    py_bindfunc(kn, "self_in_dark", RuntimeNatives::self_in_dark);
+    py_bindfunc(kn, "self_diet", RuntimeNatives::self_diet);
+    py_bindfunc(kn, "self_state", RuntimeNatives::self_state);
+    py_bindfunc(kn, "forest_info", RuntimeNatives::forest_info);
     py_bindfunc(kn, "field_info", RuntimeNatives::field_info);
     py_bindfunc(kn, "building_info", RuntimeNatives::building_info);
     py_bindfunc(kn, "world_season", RuntimeNatives::world_season);

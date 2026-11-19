@@ -9,7 +9,7 @@ signal code_applied(code: String)         # the selected character's own code
 signal shared_code_applied(code: String)  # the shared code of the settlement
 signal character_selected(id: int)
 signal restart_requested
-signal build_requested(kind: String)      # "house" / "storage" / "field" / "barn" / "trading_post" / "board"
+signal build_requested(kind: String)      # "house" / "storage" / "field" / "barn" / "trading_post" / "board" / "lantern" / a workshop type
 signal blueprint_named(name: String)      # the name dialog was confirmed
 signal blueprint_cancelled
 signal global_set(name: String, text: String)
@@ -36,7 +36,9 @@ const SPEEDS := [0.0, 1.0, 3.0, 10.0]
 const CRAFT_NAMES := {"flour": "меле зерно", "bread": "пече хліб", "axe": "кує сокиру", "sickle": "кує серп",
 	"scythe": "кує косу", "cloth": "тче тканину", "clothes": "шиє одяг", "warm_clothes": "шиє теплий одяг",
 	"planks": "пиляє дошки", "bed": "робить ліжко", "charcoal": "палить вугілля", "iron": "плавить залізо",
-	"pickaxe": "кує кайло", "water": "набирає воду"}
+	"pickaxe": "кує кайло", "water": "набирає воду", "bandage": "робить бинти",
+	"oil": "тисне олію", "torch": "робить смолоскипи", "smoked_meat": "коптить м'ясо", "cheese": "варить сир",
+	"sapling": "вирощує саджанці", "beer": "варить пиво"}
 const ACTION_NAMES := {
 	"go_to": "іде до", "go_home": "іде додому", "take": "бере інструмент", "put_back": "повертає інструмент",
 	"chop_wood": "рубає дрова", "drop": "кладе все на склад", "pick_up": "бере зі складу", "eat": "їсть",
@@ -44,13 +46,16 @@ const ACTION_NAMES := {
 	"sow": "сіє", "harvest": "жне", "craft": "виготовляє",
 	"deliver": "несе матеріали на будову", "build": "будує", "move_into": "переселяється",
 	"post": "пише на дошці оголошень", "read": "читає дошку оголошень",
-	"mine": "добуває", "water": "поливає поле", "mow": "косить сіно", "feed": "годує тварину", "milk": "доїть корову", "collect_eggs": "збирає яйця",
+	"mine": "добуває", "water": "поливає поле", "gather_herbs": "збирає трави", "treat": "лікує",
+	"hold_service": "править службу", "bury": "ховає померлого", "light": "запалює ліхтар", "plant": "садить дерева",
+	"bathe": "миється в лазні", "drink": "п'є пиво", "mow": "косить сіно", "feed": "годує тварину", "milk": "доїть корову", "collect_eggs": "збирає яйця",
 	"slaughter": "забиває тварину", "order": "залишає замовлення купцю", "dismantle": "розбирає інструмент"}
 const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "зерно", "flour": "борошно",
 	"hay": "сіно", "milk": "молоко", "eggs": "яйця", "meat": "м'ясо", "clothes": "звичайний одяг",
 	"warm_clothes": "теплий одяг", "scrap": "брухт", "flax": "льон", "cloth": "тканина", "rags": "ганчір'я",
 	"planks": "дошки", "bed": "ліжко", "stone": "камінь", "ore": "руда", "charcoal": "вугілля", "iron": "залізо",
-	"water": "вода"}
+	"water": "вода", "herbs": "трави", "bandage": "бинти", "oil": "олія", "torch": "смолоскипи",
+	"smoked_meat": "копчене м'ясо", "cheese": "сир", "sapling": "саджанці", "beer": "пиво"}
 const TOOL_NAMES := {"axe": "сокира", "sickle": "серп", "scythe": "коса", "pickaxe": "кайло"}
 const CLOTHES_NAMES := {"clothes": "звичайний", "warm_clothes": "теплий"}
 const LOG_COLORS := {
@@ -571,9 +576,9 @@ func update_character(c: Dictionary, knowledge: Array = []) -> void:
 			lines.append("Дія: думає (виконує код)")
 		else:
 			lines.append("Дія: стоїть без діла")
-		lines.append("Голод %s · Втома %s · Тепло %s · Здоров'я %s" % [
+		lines.append("Голод %s · Втома %s · Тепло %s · Здоров'я %s · Настрій %s" % [
 			_need(c["hunger"], 80.0, false), _need(c["fatigue"], 90.0, false), _need(c["warmth"], 30.0, true),
-			_need(c["health"], 30.0, true)])
+			_need(c["health"], 30.0, true), _need(c["mood"], 30.0, true)])
 		var carrying := []
 		var carried: Dictionary = c["carrying"]
 		for res in carried:
@@ -581,6 +586,13 @@ func update_character(c: Dictionary, knowledge: Array = []) -> void:
 		lines.append("Дім: %s · Одяг: %s · Інструмент: %s" % [
 			c["home"] if c["home"] != "" else "—", _clothes_text(c), _tool_text(c)])
 		lines.append("Несе: %s" % (", ".join(carrying) if not carrying.is_empty() else "—"))
+		var diet := []
+		for food in c["diet"]:
+			diet.append(RESOURCE_NAMES.get(food, food))
+		lines.append("Раціон за тиждень: %s" % (", ".join(diet) if not diet.is_empty() else "—"))
+		var ailments := _ailments_text(c)
+		if ailments != "":
+			lines.append(ailments)
 		var known := []
 		for k in knowledge:
 			known.append("%s — %s" % [k["name"], _ago_text(k["ago"])])
@@ -665,6 +677,23 @@ func _need(value: float, threshold: float, low_is_bad: bool) -> String:
 
 
 ## The tool in hands with its condition: "сокира 64%", "сокира (зламана)", "—".
+## Illness and injury: how long they last, whether they were treated.
+func _ailments_text(c: Dictionary) -> String:
+	var parts := []
+	for a in [["illness", "Хвороба"], ["injury", "Травма"]]:
+		var left: float = c[a[0] + "_left"]
+		if left > 0.0:
+			parts.append("%s: ще %s%s" % [a[1], _hours_text(left), " (лікується)" if c[a[0] + "_treated"] else ""])
+	if c["hangover"]:
+		parts.append("похмілля")
+	return "[color=#ff9070]%s[/color]" % " · ".join(parts) if not parts.is_empty() else ""
+
+
+func _hours_text(hours: float) -> String:
+	var h := int(ceil(hours - 0.05))  # 71.00001 h is "2 дн. 23 год", not "3 дн."
+	return "%d дн. %d год" % [h / 24, h % 24] if h >= 24 else "%d год" % h
+
+
 func _clothes_text(c: Dictionary) -> String:
 	var clothes: String = c["clothes"]
 	if clothes == "":

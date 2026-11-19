@@ -46,12 +46,13 @@ public:
 
     // [{id, kind, name, position: Vector2 (meters), ...}] plus, by kind:
     //   storage: resources, tools (whole, by kind), broken_tools; house: firewood, temperature, heated, chest, capacity, residents;
-    //   forest: trees_left, trees_total; deposit: resource, left; field: state, crop, watered, growth, grain_left; board: notes (count);
+    //   forest: trees_left, trees_total, capacity, saplings; deposit: resource, left; lantern: fuel, lit; field: state, crop, watered, growth, grain_left; board: notes (count);
     //   barn: capacity, animals (count); meadow: hay, hay_max; town_hall: coins;
     //   trading_post: for_sale, received ({item: n}), orders ([[item, n]]), merchant_here; workshop: workshop (type);
     //   every building: built, progress (0..1), needs (missing materials), materials_needed
     godot::Array get_buildings() const;
     // [{id, name, position, alive, hunger, fatigue, health, warmth, tool, tool_condition (%, -1 = none), clothes, clothes_condition,
+//   illness_left / injury_left (hours, 0 = healthy), illness_treated / injury_treated, mood, buried, diet (foods of the last diet_days), hangover, clean,
     //   carrying, home, state,
     //   action_item (craft: what is being made), state_text, line, line_file ("own" / "shared" / ""), action, action_target, death_cause, death_time (-1 while alive), death_time_text}]
     godot::Array get_characters() const;

@@ -11,7 +11,7 @@ import inspect as _inspect
 
 _DAY = 86400.0
 _POLL_SECONDS = 60.0
-_RESOURCES = ("wood", "bread", "grain", "flour", "hay", "milk", "eggs", "meat", "clothes", "warm_clothes", "scrap", "flax", "cloth", "rags", "planks", "bed", "stone", "ore", "charcoal", "iron", "water")
+_RESOURCES = ("wood", "bread", "grain", "flour", "hay", "milk", "eggs", "meat", "clothes", "warm_clothes", "scrap", "flax", "cloth", "rags", "planks", "bed", "stone", "ore", "charcoal", "iron", "water", "herbs", "bandage", "oil", "torch", "smoked_meat", "cheese", "sapling", "beer")
 
 
 def _is_number(x):
@@ -627,6 +627,83 @@ class Well(Workshop):
     _kind = "well"
 
 
+class HeatedWorkshop(Workshop):
+    """Майстерня з піччю (лікарня, лазня, корчма): опалюється, як будинок — me.heat(...)."""
+    _kind = "heated_workshop"
+
+    @property
+    def firewood(self):
+        return _kn.house_info(self._id, "firewood")
+
+    @property
+    def temperature(self):
+        return _kn.house_info(self._id, "temperature")
+
+    @property
+    def is_heated(self):
+        return _kn.house_info(self._id, "heated")
+
+
+class Hospital(HeatedWorkshop):
+    """Лікарня: тут лікують хворих (трави) і травмованих (бинт): me.treat(хворий). Опалюється, як будинок."""
+    _kind = "hospital"
+
+    @property
+    def patients(self):
+        """Хворі й травмовані, що зараз у лікарні. Видно лише з самої лікарні."""
+        return [_wrap(info) for info in _kn.hospital_patients(self._id)]
+
+
+class Church(Workshop):
+    """Церква з кладовищем: me.hold_service(church) — служба (настрій присутнім), me.bury(тіло) — поховання."""
+    _kind = "church"
+
+    @property
+    def graves(self):
+        """Скільки поховано на кладовищі (бачене)."""
+        return _kn.church_info(self._id, "graves")
+
+    @property
+    def service_ready(self):
+        """Чи можна правити службу: від попередньої минуло досить часу (бачене)."""
+        return _kn.church_info(self._id, "service_ready")
+
+
+class OilPress(Workshop):
+    """Олійня: льон → олія (прес); олія з дровами → смолоскип."""
+    _kind = "oil_press"
+
+
+class Smokehouse(Workshop):
+    """Коптильня: м'ясо + дрова → копчене м'ясо (не псується)."""
+    _kind = "smokehouse"
+
+
+class Dairy(Workshop):
+    """Сироварня: молоко → сир (не псується)."""
+    _kind = "dairy"
+
+
+class Nursery(Workshop):
+    """Лісорозсадник: саджанці (грядки), які садять у лісі (me.plant)."""
+    _kind = "nursery"
+
+
+class Bathhouse(HeatedWorkshop):
+    """Лазня: me.bathe(лазня) — з водою з рук, коли натоплено. Знімає втому, піднімає настрій, береже від хвороб."""
+    _kind = "bathhouse"
+
+
+class Brewery(Workshop):
+    """Пивоварня: зерно 2 + вода 1 → пиво (казан)."""
+    _kind = "brewery"
+
+
+class Tavern(HeatedWorkshop):
+    """Корчма: me.drink(корчма) — кухоль пива з рук; відпочинок (me.rest) тут дає більше настрою."""
+    _kind = "tavern"
+
+
 class TradingPost(Storage):
     """Торговий пост: amount() і has_tool() — що лишив купець (куплене);
     for_sale — що чекає на продаж; orders — замовлення на наступний візит."""
@@ -648,6 +725,21 @@ class Forest(GameObject):
     def trees_left(self):
         return _kn.forest_trees(self._id)
 
+    @property
+    def saplings(self):
+        """Скільки посаджено саджанців, що ще ростуть (бачене)."""
+        return _kn.forest_info(self._id, "saplings")
+
+    @property
+    def capacity(self):
+        """Скільки дерев уміщається в лісі."""
+        return _kn.forest_info(self._id, "capacity")
+
+    @property
+    def room(self):
+        """Скільки ще саджанців можна посадити (бачене)."""
+        return _kn.forest_info(self._id, "room")
+
 
 class Deposit(GameObject):
     """Родовище: кар'єр (камінь, "stone") чи рудня (руда, "ore"). Добувають кайлом: me.mine(...)."""
@@ -661,6 +753,25 @@ class Deposit(GameObject):
     def left(self):
         """Скільки лишилося — за знанням персонажа (0, якщо ще не бачив)."""
         return _kn.deposit_info(self._id, "left")
+
+
+class Cellar(Storage):
+    """Погріб: склад, у якому їжа псується втричі повільніше. buildings(Storage) — склади разом із погребами."""
+    _kind = "cellar"
+
+
+class Lantern(Building):
+    """Ліхтар: вечорами запалюють олією (me.light), на світанку гасне. Уночі світить на 40 м — без світла важка робота травмує."""
+    _kind = "lantern"
+
+    @property
+    def fuel(self):
+        """Скільки олії в ліхтарі (бачене); одна одиниця горить 4 год."""
+        return _kn.lantern_info(self._id, "fuel")
+
+    @property
+    def is_lit(self):
+        return _kn.lantern_info(self._id, "lit")
 
 
 class Field(Building):
@@ -794,6 +905,29 @@ class Person(GameObject):
         return _kn.char_stat(self._id, "warmth")
 
     @property
+    def mood(self):
+        """Настрій 0…100: нижче 30 праця повільніша. Падає від роботи, голоду, холоду; росте від відпочинку й служб."""
+        return _kn.char_stat(self._id, "mood")
+
+    @property
+    def is_alive(self):
+        return _kn.char_stat(self._id, "alive")
+
+    @property
+    def is_sick(self):
+        """Хворіє (за тим, що персонаж бачив; про себе — завжди точно)."""
+        return _kn.char_stat(self._id, "sick")
+
+    @property
+    def is_injured(self):
+        return _kn.char_stat(self._id, "injured")
+
+    @property
+    def needs_treatment(self):
+        """Хворий чи травмований, якого ще не лікували в лікарні."""
+        return _kn.char_stat(self._id, "needs_treatment")
+
+    @property
     def clothes_condition(self):
         """Стан одягу на персонажі, %; None — без одягу."""
         return _kn.char_clothes_condition(self._id)
@@ -821,9 +955,13 @@ class Person(GameObject):
 _CLASSES = {"storage": Storage, "house": House, "forest": Forest, "field": Field, "person": Person, "board": Board,
             "barn": Barn, "meadow": Meadow, "cow": Cow, "chicken": Chicken, "town_hall": TownHall,
             "trading_post": TradingPost, "smithy": Smithy, "tailor": Tailor,
-            "sawmill": Sawmill, "carpentry": Carpentry, "kiln": Kiln, "well": Well, "deposit": Deposit}
+            "sawmill": Sawmill, "carpentry": Carpentry, "kiln": Kiln, "well": Well, "hospital": Hospital,
+            "church": Church, "oil_press": OilPress, "deposit": Deposit, "lantern": Lantern,
+            "cellar": Cellar, "smokehouse": Smokehouse, "dairy": Dairy, "nursery": Nursery,
+            "bathhouse": Bathhouse, "brewery": Brewery, "tavern": Tavern}
 _BUILDING_TYPES = (Storage, House, Forest, Field, Board, Barn, Meadow, TownHall, TradingPost, Workshop, Smithy, Tailor, Sawmill, Carpentry, Kiln,
-                   Well, Deposit)
+                   Well, Hospital, Church, OilPress, Deposit, Lantern,
+                   Cellar, Smokehouse, Dairy, Nursery, HeatedWorkshop, Bathhouse, Brewery, Tavern)
 
 
 def _item_key(item):
@@ -996,8 +1134,10 @@ class Me(Person):
         raise TypeError("wait_until() очікує час доби (time(6, 0)) або умову (lambda: ...)")
 
     def heat(self, house, amount=None):
-        """Покласти в піч будинку дрова, які несе персонаж (усі або amount)."""
-        hid = _id_of(house, House, "heat")
+        """Покласти в піч будинку, лікарні, лазні чи корчми дрова, які несе персонаж (усі або amount)."""
+        if not isinstance(house, (House, HeatedWorkshop)):
+            raise TypeError(f"heat(): очікується House або майстерня з піччю, а отримано {_tname(house)}")
+        hid = house._id
         p = {}
         if amount is not None:
             if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
@@ -1057,6 +1197,63 @@ class Me(Person):
     def water(self, field, until=None, hours=None):
         """Полити поле: 5 відер води з рук, 30 хв. Полите поле росте швидше протягом доби."""
         return _kn.act("water", _id_of(field, Field, "water"), _limits(None, until, hours))
+
+    def gather_herbs(self, meadow, amount=None, until=None, hours=None):
+        """Збирати лікарські трави на лузі (30 хв на одиницю), лише в теплу пору. Без обмежень — до повних рук."""
+        return _kn.act("gather_herbs", _id_of(meadow, Meadow, "gather_herbs"), _limits(amount, until, hours))
+
+    def bathe(self, bathhouse):
+        """Помитися в натопленій лазні (2 відра води з рук, 1 год): −30 втоми, +10 настрою, 2 доби хворіти вдвічі рідше. Раз на добу."""
+        return _kn.act("bathe", _id_of(bathhouse, Bathhouse, "bathe"), None)
+
+    def drink(self, tavern):
+        """Випити в корчмі кухоль пива з рук (20 хв): +6 настрою. Третій кухоль за добу — похмілля на 12 год."""
+        return _kn.act("drink", _id_of(tavern, Tavern, "drink"), None)
+
+    @property
+    def is_clean(self):
+        """Після лазні (2 доби): хворіти вдвічі рідше."""
+        return _kn.self_state("clean")
+
+    @property
+    def has_hangover(self):
+        """Похмілля: праця повільніша, травми частіші."""
+        return _kn.self_state("hangover")
+
+    def plant(self, forest, amount=None, until=None, hours=None):
+        """Посадити в лісі саджанці з рук: 10 хв кожен. Лише в теплу пору й на вирубаному місці. Повертає кількість."""
+        return _kn.act("plant", _id_of(forest, Forest, "plant"), _limits(amount, until, hours))
+
+    def light(self, lantern, amount=None):
+        """Долити в ліхтар олію з рук (усю або amount) і запалити, якщо вже ніч. Вдень лише доливає. 5 хв."""
+        p = {}
+        if amount is not None:
+            p["amount"] = amount
+        return _kn.act("light", _id_of(lantern, Lantern, "light"), p)
+
+    @property
+    def diet(self):
+        """Які страви персонаж їв за останні 7 днів: ["bread", "milk"]. Три й більше — настрій росте, одна — падає."""
+        return _kn.self_diet()
+
+    @property
+    def is_in_dark(self):
+        """Ніч, а поруч немає запаленого ліхтаря (смолоскип у руках горить сам під час важкої роботи)."""
+        return _kn.self_in_dark()
+
+    def hold_service(self, church):
+        """Правити службу в церкві (1 год): усі, хто наприкінці в церкві, отримують +20 настрою. Не частіше ніж раз на 20 год."""
+        return _kn.act("hold_service", _id_of(church, Church, "hold_service"), None)
+
+    def bury(self, body):
+        """Поховати померлу людину чи тварину на кладовищі при найближчій церкві: дійти до тіла, віднести, 1 год."""
+        if not isinstance(body, (Person, Animal)):
+            raise TypeError(f"bury(): очікується Person або Animal, а отримано {_tname(body)}")
+        return _kn.act("bury", body._id, None)
+
+    def treat(self, person):
+        """Лікувати в лікарні: хворого — травами (2 з рук), травмованого — бинтом. 30 хв. Можна й себе."""
+        return _kn.act("treat", _id_of(person, Person, "treat"), None)
 
     def mow(self, meadow, amount=None, until=None, hours=None):
         """Косити луг косою: сіно — в руки. Лише в теплу пору."""
@@ -1121,6 +1318,11 @@ def buildings(kind):
     if kind not in _BUILDING_TYPES:
         raise TypeError("buildings() приймає тип будівлі, наприклад Storage, House, Field, Barn, TradingPost")
     return [_wrap(info) for info in _kn.list_objects(kind._kind)]
+
+
+def bodies():
+    """Непоховані тіла людей і тварин (про смерть знають усі). Ховати: me.bury(тіло)."""
+    return [_wrap(info) for info in _kn.bodies()]
 
 
 def animals(kind=None):
@@ -1264,9 +1466,9 @@ __all__ = [
     "WorkplaceBusyError", "ToolBrokenError", "Building",
     "Tool", "Axe", "Sickle", "Scythe", "Pickaxe", "Clothes", "WarmClothes", "Deposit",
     "GameObject", "Storage", "House", "Forest", "Field", "Board", "Barn", "Meadow", "Person", "Me", "me",
-    "TownHall", "TradingPost", "merchant", "Workshop", "Smithy", "Tailor", "Sawmill", "Carpentry", "Kiln", "Well",
+    "TownHall", "TradingPost", "merchant", "Workshop", "Smithy", "Tailor", "Sawmill", "Carpentry", "Kiln", "Well", "Hospital", "Church", "OilPress", "Lantern", "Cellar", "Smokehouse", "Dairy", "Nursery", "HeatedWorkshop", "Bathhouse", "Brewery", "Tavern",
     "Animal", "Cow", "Chicken",
-    "get", "buildings", "animals", "tools", "notify", "on", "off",
+    "get", "buildings", "animals", "tools", "bodies", "notify", "on", "off",
 ]
 
 for _name in __all__:

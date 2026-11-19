@@ -17,7 +17,7 @@ constexpr size_t kSavedLogEntries = 500;
 ObjKind kind_from(const std::string& s) {
     for (ObjKind k : {ObjKind::Storage, ObjKind::House, ObjKind::Forest, ObjKind::Field, ObjKind::Person, ObjKind::Board,
                       ObjKind::Barn, ObjKind::Meadow, ObjKind::Animal, ObjKind::TownHall, ObjKind::TradingPost,
-                      ObjKind::Workshop, ObjKind::Deposit})
+                      ObjKind::Workshop, ObjKind::Deposit, ObjKind::Lantern})
         if (s == kind_name(k)) return k;
     throw std::runtime_error("невідомий тип об'єкта " + s);
 }
@@ -122,7 +122,9 @@ json object_to_json(const Object& o) {
         {"removed", o.removed}, {"produce", o.produce}, {"hunger_warned", o.hunger_warned},
         {"death_cause", o.death_cause}, {"hay", o.hay},
         {"coins", o.coins}, {"for_sale", counts(o.for_sale)}, {"sale_tools", tools_to_json(o.sale_tools)},
-        {"orders", o.orders}, {"workshop", o.workshop}, {"crop", o.crop}, {"watered_until", o.watered_until}, {"deposit", o.deposit}, {"deposit_left", o.deposit_left},
+        {"orders", o.orders}, {"workshop", o.workshop}, {"crop", o.crop}, {"watered_until", o.watered_until},
+        {"death_time", o.death_time}, {"graves", o.graves}, {"last_service", o.last_service},
+        {"fuel", o.fuel}, {"lit", o.lit}, {"saplings", o.saplings}, {"grown", o.grown}, {"cellar", o.cellar}, {"spoil", o.spoil}, {"spoiled", counts(o.spoiled)}, {"deposit", o.deposit}, {"deposit_left", o.deposit_left},
     };
 }
 
@@ -168,6 +170,16 @@ Object object_from_json(const json& oj) {
     o.workshop = oj.at("workshop").get<std::string>();
     o.crop = oj.at("crop").get<std::string>();
     o.watered_until = oj.at("watered_until").get<double>();
+    o.death_time = oj.at("death_time").get<double>();
+    o.graves = oj.at("graves").get<int>();
+    o.last_service = oj.at("last_service").get<double>();
+    o.fuel = oj.at("fuel").get<double>();
+    o.lit = oj.at("lit").get<bool>();
+    o.saplings = oj.at("saplings").get<std::vector<double>>();
+    o.grown = oj.at("grown").get<int>();
+    o.cellar = oj.at("cellar").get<bool>();
+    o.spoil = oj.at("spoil").get<std::map<std::string, double>>();
+    o.spoiled = counts_from(oj.at("spoiled"));
     o.deposit = oj.at("deposit").get<std::string>();
     o.deposit_left = oj.at("deposit_left").get<int>();
     return o;
@@ -178,7 +190,10 @@ json knowledge_to_json(const Knowledge& k) {
     if (k.state.kind == ObjKind::Person) {
         const PersonView& p = k.person;
         j["person"] = {{"hunger", p.hunger}, {"fatigue", p.fatigue}, {"health", p.health}, {"warmth", p.warmth},
-                       {"alive", p.alive}, {"tool", tool_to_json(p.tool)}, {"clothes", garment_to_json(p.clothes)}, {"carrying", counts(p.carrying)}};
+                       {"alive", p.alive}, {"tool", tool_to_json(p.tool)}, {"clothes", garment_to_json(p.clothes)}, {"carrying", counts(p.carrying)},
+                       {"illness_left", p.illness_left}, {"injury_left", p.injury_left},
+                       {"illness_treated", p.illness_treated}, {"injury_treated", p.injury_treated},
+                       {"mood", p.mood}};
     }
     return j;
 }
@@ -201,6 +216,11 @@ Knowledge knowledge_from_json(const json& j, const std::vector<Object>& objects)
         k.person.alive = p.at("alive").get<bool>();
         k.person.tool = tool_from_json(p.at("tool"));
         k.person.clothes = garment_from_json(p.at("clothes"));
+        k.person.illness_left = p.at("illness_left").get<double>();
+        k.person.injury_left = p.at("injury_left").get<double>();
+        k.person.illness_treated = p.at("illness_treated").get<bool>();
+        k.person.injury_treated = p.at("injury_treated").get<bool>();
+        k.person.mood = p.at("mood").get<double>();
         k.person.carrying = counts_from(p.at("carrying"));
     }
     return k;
@@ -230,6 +250,9 @@ struct SaveAccess {
                          {"here", w.merchant_.here}, {"post", w.merchant_.post},
                          {"prices", counts(w.merchant_.prices)}, {"offers", counts(w.merchant_.offers)},
                          {"rng", trade_rng.str()}};
+        std::ostringstream health_rng;
+        health_rng << w.health_rng_;
+        j["health_rng"] = health_rng.str();
 
         json globals = json::object();
         for (const auto& [name, value] : w.globals_) std::visit([&](const auto& v) { globals[name] = v; }, value);
@@ -251,7 +274,7 @@ struct SaveAccess {
         for (const StatSample& st : w.stats_)
             stats.push_back({{"time", st.time}, {"stock", counts(st.stock)}, {"coins", st.coins}, {"people", st.people},
                              {"health", st.health}, {"hunger", st.hunger}, {"warmth", st.warmth},
-                             {"fatigue", st.fatigue}, {"animals", st.animals}});
+                             {"fatigue", st.fatigue}, {"mood", st.mood}, {"animals", st.animals}});
         j["stats"] = stats;
 
         json characters = json::array();
@@ -265,6 +288,11 @@ struct SaveAccess {
                 {"obj", c.obj}, {"name", c.name}, {"hunger", c.hunger}, {"fatigue", c.fatigue},
                 {"health", c.health}, {"warmth", c.warmth}, {"alive", c.alive}, {"tool", tool_to_json(c.tool)},
                 {"clothes", garment_to_json(c.clothes)}, {"carrying", counts(c.carrying)}, {"home", c.home},
+                {"illness_left", c.illness_left}, {"injury_left", c.injury_left},
+                {"illness_treated", c.illness_treated}, {"injury_treated", c.injury_treated},
+                {"mood", c.mood}, {"buried", c.buried}, {"mood_warned", c.mood_warned}, {"torch_left", c.torch_left}, {"ate", c.ate},
+                {"clean_until", c.clean_until}, {"last_bath", c.last_bath}, {"hangover_until", c.hangover_until},
+                {"drink_day", c.drink_day}, {"beers", c.beers},
                 {"last_action_time", c.last_action_time}, {"work_partial", partial},
                 {"idle_warned", c.idle_warned}, {"hunger_warned", c.hunger_warned},
                 {"fatigue_warned", c.fatigue_warned}, {"cold_warned", c.cold_warned},
@@ -308,6 +336,9 @@ struct SaveAccess {
         std::istringstream trade_rng(m.at("rng").get<std::string>());
         trade_rng >> w.trade_rng_;
         if (!trade_rng) throw std::runtime_error("пошкоджений стан генератора цін");
+        std::istringstream health_rng(j.at("health_rng").get<std::string>());
+        health_rng >> w.health_rng_;
+        if (!health_rng) throw std::runtime_error("пошкоджений стан генератора хвороб");
 
         w.globals_.clear();
         for (const auto& [name, v] : j.at("globals").items()) {
@@ -346,6 +377,20 @@ struct SaveAccess {
             c.alive = cj.at("alive").get<bool>();
             c.tool = tool_from_json(cj.at("tool"));
             c.clothes = garment_from_json(cj.at("clothes"));
+            c.illness_left = cj.at("illness_left").get<double>();
+            c.injury_left = cj.at("injury_left").get<double>();
+            c.illness_treated = cj.at("illness_treated").get<bool>();
+            c.injury_treated = cj.at("injury_treated").get<bool>();
+            c.mood = cj.at("mood").get<double>();
+            c.buried = cj.at("buried").get<bool>();
+            c.mood_warned = cj.at("mood_warned").get<bool>();
+            c.torch_left = cj.at("torch_left").get<double>();
+            c.ate = cj.at("ate").get<std::map<std::string, double>>();
+            c.clean_until = cj.at("clean_until").get<double>();
+            c.last_bath = cj.at("last_bath").get<double>();
+            c.hangover_until = cj.at("hangover_until").get<double>();
+            c.drink_day = cj.at("drink_day").get<int>();
+            c.beers = cj.at("beers").get<int>();
             c.carrying = counts_from(cj.at("carrying"));
             c.home = cj.at("home").get<int>();
             if (c.home >= static_cast<int>(w.objects_.size()) || (c.home >= 0 && w.objects_[c.home].kind != ObjKind::House))
@@ -384,6 +429,7 @@ struct SaveAccess {
             st.hunger = sj.at("hunger").get<double>();
             st.warmth = sj.at("warmth").get<double>();
             st.fatigue = sj.at("fatigue").get<double>();
+            st.mood = sj.at("mood").get<double>();
             st.animals = sj.at("animals").get<int>();
             w.stats_.push_back(st);
         }

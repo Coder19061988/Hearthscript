@@ -53,13 +53,18 @@ Opts mvp_opts() {
     return o;
 }
 
+const Balance& default_balance() {
+    static Balance balance = proto::load_balance(proto::source_path("config/balance.json"), false);
+    return balance;
+}
+
 class Ctx {
 public:
     bool ok = true;
 
-    Simulation& sim(const Opts& o) {
-        static Balance balance = proto::load_balance(proto::source_path("config/balance.json"), false);
-        sims_.push_back(std::make_unique<Simulation>(balance, o.seed));
+    // `custom`: a balance of the test's own (e.g. chances raised to certainty); default — config/balance.json.
+    Simulation& sim(const Opts& o, const Balance* custom = nullptr) {
+        sims_.push_back(std::make_unique<Simulation>(custom ? *custom : default_balance(), o.seed));
         Simulation& s = *sims_.back();
         s.world().set_random_rain(o.random_rain);
         StartScene scene;
@@ -730,6 +735,14 @@ const TestCase kTests[] = {
     {"wood", "ланцюжок дерева: лісопилка, столярня, ліжка", t_wood},
     {"mining", "камінь і метал: кайло, вуглярня, залізо", t_mining},
     {"water", "вода: колодязь, полив поля, дощ", t_water},
+    {"ailments", "хвороби й травми: хто й від чого", t_ailments},
+    {"treatment", "лікарня: трави, бинти, me.treat", t_treatment},
+    {"mood", "настрій: робота, вільний час, поганий настрій", t_mood},
+    {"church", "церква: служби, поховання, тіла", t_church},
+    {"lighting", "освітлення: ліхтарі, смолоскипи, олійня", t_lighting},
+    {"food", "їжа: псування, погріб, коптильня, сироварня, раціон", t_food},
+    {"forestry", "лісорозсадник: саджанці, me.plant, ріст дерев", t_forestry},
+    {"leisure", "лазня, пивоварня, корчма", t_leisure},
 };
 
 }  // namespace

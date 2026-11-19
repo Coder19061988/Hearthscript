@@ -118,7 +118,9 @@ def check_actions() -> None:
     for n in core - view:
         warnings.append(f"дії: \"{n}\" немає в ACTION_SHORT (godot/scripts/world_view.gd) — підпис над головою буде сирим")
 
-    me_methods = re.findall(r"^    def ([a-z]\w*)\(self", block(prelude_text, "class Me(Person)", "\nme = Me("), re.M)
+    me_block = block(prelude_text, "class Me(Person)", "\nme = Me(")
+    properties = set(re.findall(r"^    @property\n    def (\w+)\(self", me_block, re.M))  # me.x, not me.x(...)
+    me_methods = [m for m in re.findall(r"^    def ([a-z]\w*)\(self", me_block, re.M) if m not in properties]
     help_text = read("godot/scripts/help_text.gd")
     docs = read("API_прототипу.md") + read("API_MVP.md")
     for m in me_methods:

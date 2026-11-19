@@ -256,12 +256,13 @@ void t_mvp_winter_survival(Ctx& ctx) {
     World& w = s.world();
     if (!set_settlement_code(ctx, s)) return;
 
-    double min_health = 100, min_warmth = 100;
+    double min_health = 100, min_warmth = 100, min_mood = 100;
     std::string winter_start;
     while (w.now() < at(16, 6)) {
         s.tick(60);
         for (Character& c : w.characters()) {
             min_health = std::min(min_health, c.health);
+            min_mood = std::min(min_mood, c.mood);
             if (w.season_at(w.now()) == Season::Winter) min_warmth = std::min(min_warmth, c.warmth);
         }
         if (winter_start.empty() && w.season_at(w.now()) == Season::Winter) {
@@ -279,9 +280,9 @@ void t_mvp_winter_survival(Ctx& ctx) {
     char buf[240];
     std::snprintf(buf, sizeof buf,
                   "після зими: живих %d/4, хліб %d, зерно %d, дрова %d; урожаїв %d; мін. здоров'я %.0f, мін. тепло "
-                  "взимку %.0f",
+                  "взимку %.0f, мін. настрій %.0f",
                   alive, st.resources["bread"], st.resources["grain"], st.resources["wood"], count_log(w, "дозріло"),
-                  min_health, min_warmth);
+                  min_health, min_warmth, min_mood);
     ctx.info(buf);
     ctx.check(alive == 4, "усі четверо пережили першу зиму");
     ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
@@ -1032,6 +1033,542 @@ notify("полито")
     std::string err;
     auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
     ctx.check(loaded && save_game(*loaded) == text, "полив зберігається: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// Who falls ill and who gets hurt. The chances are per hour, so the test raises them to certainty.
+void t_ailments(Ctx& ctx) {
+    Balance b = default_balance();
+    b.illness_cold_per_hour = 100;
+    b.injury_dark_per_hour = 100;
+    Opts o;
+    o.chars = 3;
+    o.start_hour = 22;  // night
+    Simulation& s = ctx.sim(o, &b);
+    World& w = s.world();
+    Character& worker = w.character(w.char_obj_id(0));
+    Character& frozen = w.character(w.char_obj_id(1));
+    Character& sleeper = w.character(w.char_obj_id(2));
+    frozen.warmth = 10;
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+me.take(Axe, get("Склад_1"))
+assert me.chop_wood(get("Ліс_1"), amount=2) == 2
+assert me.is_injured and me.needs_treatment and not me.is_sick
+notify("травма вночі")
+)PY");
+    s.runtime().set_code(w.char_obj_id(2), "me.sleep(until=time(6, 0))\n");
+    s.run_until(at(2, 1));
+    ctx.check(find_log(w, "травма вночі").has_value() && worker.injury_left > 0 &&
+                  find_log(w, "травма на роботі").has_value(),
+              "важка робота вночі — травма");
+    ctx.check(frozen.illness_left > 0 && find_log(w, "хвороба. Лежати").has_value(), "змерзлий хворіє");
+    ctx.check(frozen.illness_left > b.illness_hours - 4 && frozen.health < 100, "хвороба триває й шкодить здоров'ю");
+    ctx.check(sleeper.illness_left == 0 && sleeper.injury_left == 0, "хто спить у теплі — здоровий");
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+
+    // The reference settlement: the sick one lies at home until the illness passes, and survives it.
+    Simulation& ms = ctx.sim(mvp_opts());
+    World& mw = ms.world();
+    if (!set_settlement_code(ctx, ms)) return;
+    Character& ill = mw.character(mw.char_obj_id(0));
+    ill.illness_left = 30;
+    ms.run_until(at(2, 18));
+    ctx.check(find_log(mw, "лежу вдома").has_value(), "еталонне поселення: хворий лягає вдома");
+    ctx.check(ill.alive && ill.illness_left == 0 && ill.health > 60 && count_kind(mw, LogKind::Error) == 0,
+              "хвороба минула, здоров'я " + std::to_string(ill.health));
+}
+
+// Treatment: herbs from the meadow and a bandage from rags (the tailor's), the hospital, me.treat;
+// an injury halves the work speed; there are no herbs in winter.
+void t_treatment(Ctx& ctx) {
+    Opts o;
+    o.chars = 3;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_workshop("hospital", "Лікарня_1", {40, 60});
+    w.add_workshop("tailor", "Кравецька_1", {-60, -60});
+    obj(w, "Склад_1").resources["rags"] = 2;
+    Character& patient = w.character(w.char_obj_id(1));
+    patient.illness_left = b.illness_hours;
+    patient.injury_left = b.injury_hours;
+    s.runtime().set_code(w.char_obj_id(1), R"PY(
+assert me.is_sick and me.is_injured and me.needs_treatment
+hospital = get("Лікарня_1")
+assert isinstance(hospital, Hospital)
+me.go_to(hospital)
+me.rest(hours=8)
+)PY");
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+hospital = get("Лікарня_1")
+patient = get("Марта")
+try:
+    me.treat(patient)
+    assert False, "без трав і бинта"
+except NoItemError:
+    pass
+me.pick_up(storage, "rags", 2)
+assert me.craft("bandage", get("Кравецька_1")) == 1
+assert me.gather_herbs(get("Луг_1"), amount=2) == 2
+assert me.carrying == {"bandage": 1, "herbs": 2}, me.carrying
+assert hospital.patients == []  # видно лише з лікарні
+me.go_to(hospital)
+assert hospital.patients == [patient] and patient.needs_treatment, hospital.patients
+me.treat(patient)
+assert me.carrying == {} and not patient.needs_treatment and patient.is_sick, me.carrying
+try:
+    me.treat(patient)
+    assert False, "уже лікували"
+except ActionError:
+    pass
+notify("вилікувано")
+)PY");
+    w.character(w.char_obj_id(2)).injury_left = b.injury_hours;
+    s.runtime().set_code(w.char_obj_id(2), "CHOP = " + std::to_string(static_cast<int>(b.chop_minutes_per_unit)) + R"PY(
+forest = get("Ліс_1")
+me.take(Axe, get("Склад_1"))
+me.go_to(forest)
+start = world.now
+me.chop_wood(forest, amount=2)
+took = world.now - start
+assert took >= minutes(4 * CHOP - 1), took
+notify("травмований рубає вдвічі повільніше")
+)PY");
+    s.run_until(at(1, 12));
+    ctx.check(find_log(w, "вилікувано").has_value(), "трави з луки й бинт із ганчір'я — лікування в лікарні");
+    ctx.check(patient.illness_treated && patient.illness_left <= b.illness_treated_hours && patient.injury_treated &&
+                  patient.injury_left <= b.injury_treated_hours,
+              "лікування скорочує хворобу й травму");
+    ctx.check(find_log(w, "вдвічі повільніше").has_value(), "травма сповільнює роботу");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "хвороби, травми й лікування зберігаються: " + err);
+
+    s.run_until(at(2, 2));
+    ctx.check(patient.illness_left == 0 && find_log(w, "хвороба минула").has_value(),
+              "вилікувана хвороба минає за illness_treated_hours");
+    ctx.check(patient.injury_left > 0, "травма гоїться довше");
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+
+    Opts ow;
+    ow.start_day = 12;  // winter
+    Simulation& sw = ctx.sim(ow);
+    sw.runtime().set_code(sw.world().char_obj_id(0), R"PY(
+try:
+    me.gather_herbs(get("Луг_1"))
+    assert False, "узимку трав немає"
+except ActionError:
+    notify("узимку трав немає")
+)PY");
+    sw.run_until(at(12, 7));
+    ctx.check(find_log(sw.world(), "узимку трав немає").has_value(), "трави збирають лише в теплу пору");
+}
+
+// Mood: heavy work wears it down, free time lifts it; a low mood slows the work and is logged.
+void t_mood(Ctx& ctx) {
+    Opts o;
+    o.chars = 3;
+    o.axes = 2;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    Character& worker = w.character(w.char_obj_id(0));
+    Character& rester = w.character(w.char_obj_id(1));
+    Character& gloomy = w.character(w.char_obj_id(2));
+    rester.mood = 50;
+    gloomy.mood = b.mood_low_threshold - 10;
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+me.take(Axe, get("Склад_1"))
+forest = get("Ліс_1")
+me.go_to(forest)
+start = me.mood
+me.chop_wood(forest, amount=8)
+notify(f"настрій після рубки {start - me.mood:.1f}")
+)PY");
+    s.runtime().set_code(w.char_obj_id(1), "me.rest(hours=4)\nassert me.mood > 60, me.mood\nnotify('відпочинок')\n");
+    s.runtime().set_code(w.char_obj_id(2), "CHOP = " + std::to_string(static_cast<int>(b.chop_minutes_per_unit)) + R"PY(
+assert me.mood < 30
+forest = get("Ліс_1")
+me.take(Axe, get("Склад_1"))
+me.go_to(forest)
+start = world.now
+me.chop_wood(forest, amount=3)
+took = world.now - start
+assert took >= minutes(3 * CHOP / 0.75 - 1), took
+notify("без настрою праця повільніша")
+)PY");
+    const double before = worker.mood;
+    s.run_until(at(1, 12));
+    ctx.check(find_log(w, "настрій після рубки").has_value() && worker.mood < before,
+              "важка робота знижує настрій: " + std::to_string(before) + " → " + std::to_string(worker.mood));
+    ctx.check(std::abs(rester.mood - (50 + 4 * b.mood_rest_per_hour)) < 0.5 && find_log(w, "відпочинок").has_value(),
+              "вільний час піднімає настрій: " + std::to_string(rester.mood));
+    ctx.check(find_log(w, "без настрою праця повільніша").has_value(), "поганий настрій сповільнює роботу");
+
+    Opts g;
+    Simulation& gs = ctx.sim(g);
+    gs.world().character(gs.world().char_obj_id(0)).mood = b.mood_low_threshold + 0.01;
+    gs.runtime().set_code(gs.world().char_obj_id(0), "me.take(Axe, get(\"Склад_1\"))\nme.chop_wood(get(\"Ліс_1\"), hours=1)\n");
+    gs.run_until(at(1, 9));
+    ctx.check(find_log(gs.world(), "поганий настрій").has_value(), "журнал попереджає про поганий настрій");
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// The church: a service lifts the mood of everyone there (once in service_interval_hours); the dead are buried
+// at its cemetery; an unburied body decays after body_decay_hours and hurts everyone's mood.
+void t_church(Ctx& ctx) {
+    Balance b = default_balance();
+    b.illness_body_per_hour = 0;  // the measured mood must not depend on a chance illness
+    Opts o;
+    o.chars = 4;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o, &b);
+    World& w = s.world();
+    Character& dead = w.character(w.char_obj_id(3));
+    dead.health = 0.01;
+    dead.hunger = 100;
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+me.wait_until(lambda: bodies(), timeout=hours(1))
+body = get("Ярина")
+assert not body.is_alive and bodies() == [body], bodies()
+try:
+    me.bury(body)
+    assert False, "церкви ще немає"
+except ActionError:
+    notify("без церкви не ховають")
+)PY");
+    s.run_until(at(1, 7));
+    ctx.check(!dead.alive && find_log(w, "без церкви не ховають").has_value(), "без церкви не ховають");
+
+    // Nobody buries it for a day and more: the body decays and everyone's mood falls.
+    s.run_until(at(2, 5, 30));
+    for (int i = 0; i < 3; ++i) {  // fed and rested: only the body changes the mood of the idle one
+        Character& c = w.character(w.char_obj_id(i));
+        c.hunger = c.fatigue = 0;
+        c.mood = 50;
+    }
+    Character& idle = w.character(w.char_obj_id(2));
+    const double idle_mood = idle.mood;
+    s.run_until(at(2, 8, 30));
+    ctx.check(std::abs(idle.mood - (idle_mood + 3 * b.mood_body_per_hour)) < 0.5,
+              "непоховане тіло після доби псує настрій усім: " + std::to_string(idle_mood) + " → " + std::to_string(idle.mood));
+
+    w.add_workshop("church", "Церква_1", {-40, 40});
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+church = get("Церква_1")
+assert isinstance(church, Church)
+for body in bodies():
+    me.bury(body)
+assert bodies() == [] and church.graves == 1, church.graves
+me.hold_service(church)
+try:
+    me.hold_service(church)
+    assert False, "друга служба того ж дня"
+except ActionError:
+    pass
+notify("поховано, служба")
+)PY");
+    s.runtime().set_code(w.char_obj_id(1), "me.go_to(get(\"Церква_1\"))\nme.rest(hours=6)\n");
+    const double rest_start = w.character(w.char_obj_id(1)).mood;
+    s.run_until(at(2, 16));
+    ctx.check(find_log(w, "поховано, служба").has_value() && dead.buried && obj(w, "Церква_1").graves == 1,
+              "тіло поховано на кладовищі при церкві");
+    ctx.check(find_log(w, "присутніх 2").has_value(), "служба для тих, хто в церкві");
+    ctx.check(w.character(w.char_obj_id(1)).mood > rest_start + b.service_mood - 0.5, "служба піднімає настрій");
+    ctx.check(!find_log(w, "присутніх 3"), "хто не в церкві, служби не має");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "настрій, поховання й служби зберігаються: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// Light: a lit lantern or a torch keeps heavy work at night safe; without light it injures (the test makes it
+// certain). Lanterns are filled with oil and lit every evening, go out at dawn; oil and torches come from the oil press.
+void t_lighting(Ctx& ctx) {
+    Balance b = default_balance();
+    b.injury_dark_per_hour = 100;
+    Opts o;
+    o.chars = 3;
+    o.axes = 3;
+    o.start_hour = 20.5;
+    Simulation& s = ctx.sim(o, &b);
+    World& w = s.world();
+    w.add_lantern("Ліхтар_1", {10, 290});  // by the forest
+    w.add_forest("Ліс_2", {300, 300}, 50);  // far from any light
+    obj(w, "Склад_1").resources["oil"] = 3;  // 12 hours of light: the lantern outlasts the night
+    obj(w, "Склад_1").resources["torch"] = 1;
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+lantern = get("Ліхтар_1")
+me.take(Axe, storage)
+me.pick_up(storage, "oil", 3)
+me.light(lantern)             # ще день: лише долито
+assert lantern.fuel == 3 and not lantern.is_lit
+me.wait_until(time(21, 5))
+me.light(lantern)
+assert lantern.is_lit and me.carrying == {}
+assert not me.is_in_dark
+me.chop_wood(get("Ліс_1"), amount=2)
+assert not me.is_injured
+notify("при ліхтарі без травм")
+)PY");
+    s.runtime().set_code(w.char_obj_id(1), R"PY(
+storage = get("Склад_1")
+me.take(Axe, storage)
+me.pick_up(storage, "torch", 1)
+forest = get("Ліс_2")
+me.go_to(forest)
+me.wait_until(time(21, 30))
+assert me.is_in_dark
+me.chop_wood(forest, amount=2)
+assert not me.is_injured and "torch" not in me.carrying, me.carrying
+notify("зі смолоскипом без травм")
+)PY");
+    s.runtime().set_code(w.char_obj_id(2), R"PY(
+me.take(Axe, get("Склад_1"))
+forest = get("Ліс_2")
+me.go_to(forest)
+me.wait_until(time(23, 30))
+me.chop_wood(forest, amount=1)
+assert me.is_injured
+notify("у темряві травма")
+)PY");
+    s.run_until(at(2, 2));
+    ctx.check(find_log(w, "при ліхтарі без травм").has_value(), "запалений ліхтар береже від травм уночі");
+    ctx.check(find_log(w, "зі смолоскипом без травм").has_value(), "смолоскип у руках горить і береже від травм");
+    ctx.check(find_log(w, "у темряві травма").has_value(), "без світла вночі — травма");
+    const Object& lantern = obj(w, "Ліхтар_1");
+    ctx.check(lantern.lit && lantern.fuel < 2 && lantern.fuel > 1.5, "ліхтар горить, олія витрачається: " +
+              std::to_string(lantern.fuel));
+    s.run_until(at(2, 7));
+    ctx.check(!lantern.lit && lantern.fuel > 0.5, "на світанку ліхтар гасне, решта олії лишається");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "ліхтарі й смолоскипи зберігаються: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+
+    // The oil press: flax → oil; oil + wood → a torch.
+    Opts p;
+    p.flax = 3;
+    Simulation& ps = ctx.sim(p);
+    ps.world().add_workshop("oil_press", "Олійня_1", {-60, -60});
+    ps.runtime().set_code(ps.world().char_obj_id(0), R"PY(
+storage = get("Склад_1")
+press = get("Олійня_1")
+assert isinstance(press, OilPress)
+me.pick_up(storage, "flax", 3)
+assert me.craft("oil", press) == 1
+me.pick_up(storage, "wood", 1)
+assert me.craft("torch", press) == 1 and me.carrying == {"torch": 1}, me.carrying
+notify("олія й смолоскип")
+)PY");
+    obj(ps.world(), "Склад_1").resources["wood"] = 1;
+    ps.run_until(at(1, 10));
+    ctx.check(find_log(ps.world(), "олія й смолоскип").has_value(), "олійня: льон → олія → смолоскип");
+}
+
+// Food spoils in storages: a share a day by kind, slower in winter and in a cellar; smoked meat and cheese keep.
+// The diet: one kind of food for a week lowers the mood, three kinds raise it.
+void t_food(Ctx& ctx) {
+    Opts o;
+    o.chars = 2;
+    o.bread = 100;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_storage("Погріб_1", {-30, 30}, {}, {{"milk", 20}});
+    obj(w, "Погріб_1").cellar = true;
+    auto& st = obj(w, "Склад_1").resources;
+    st["milk"] = 20;
+    st["smoked_meat"] = 20;
+    st["grain"] = 20;
+    s.run_until(at(3, 5, 30));  // two days of the warm season
+    const double expect_bread = 100 * std::exp(-2 * b.bread_spoil_per_day);
+    const double expect_milk = 20 * std::exp(-2 * b.milk_spoil_per_day);
+    const double expect_cellar = 20 * std::exp(-2 * b.milk_spoil_per_day * b.cellar_spoil_factor);
+    ctx.check(std::abs(st["bread"] - expect_bread) <= 1.0, "хліб за дві доби: " + std::to_string(st["bread"]));
+    ctx.check(std::abs(st["milk"] - expect_milk) <= 1.0, "молоко псується швидко: " + std::to_string(st["milk"]));
+    ctx.check(std::abs(obj(w, "Погріб_1").resources["milk"] - expect_cellar) <= 1.0,
+              "у погребі повільніше: " + std::to_string(obj(w, "Погріб_1").resources["milk"]));
+    ctx.check(st["smoked_meat"] == 20 && st["grain"] == 20, "копчене м'ясо за дві доби не зіпсувалося, зерно не псується");
+    ctx.check(find_log(w, "За добу зіпсувалося в «Склад_1»").has_value(), "журнал щодоби каже, що зіпсувалося");
+
+    // Smokehouse and dairy.
+    w.add_workshop("smokehouse", "Коптильня_1", {-60, -60});
+    w.add_workshop("dairy", "Сироварня_1", {-60, 60});
+    auto& stock = obj(w, "Склад_1").resources;  // adding objects moved them: `st` is stale
+    stock["meat"] = 1;
+    stock["wood"] = 1;
+    stock["milk"] = std::max(stock["milk"], 3);
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+assert isinstance(get("Погріб_1"), Cellar) and get("Погріб_1") in buildings(Storage)
+me.pick_up(storage, "meat", 1)
+me.pick_up(storage, "wood", 1)
+assert me.craft("smoked_meat", get("Коптильня_1")) == 1
+me.pick_up(storage, "milk", 3)
+assert me.craft("cheese", get("Сироварня_1")) == 1
+assert me.carrying == {"smoked_meat": 1, "cheese": 1}, me.carrying
+me.eat("smoked_meat")
+me.eat("cheese")
+me.pick_up(storage, "bread", 1)
+me.eat("bread")
+assert sorted(me.diet) == ["bread", "cheese", "smoked_meat"], me.diet
+notify("коптильня й сироварня")
+)PY");
+    s.run_until(at(3, 12));
+    ctx.check(find_log(w, "коптильня й сироварня").has_value(), "м'ясо → копчене, молоко → сир; різноманітний раціон");
+
+    // The diet's effect on mood: after the first week, idle at home, only bread vs three kinds.
+    Opts d;
+    d.chars = 2;
+    d.start_day = 9;
+    Simulation& ds = ctx.sim(d);
+    World& dw = ds.world();
+    Character& plain = dw.character(dw.char_obj_id(0));
+    Character& varied = dw.character(dw.char_obj_id(1));
+    plain.ate = {{"bread", at(9, 5)}};
+    varied.ate = {{"bread", at(9, 5)}, {"milk", at(8, 12)}, {"eggs", at(7, 18)}};
+    plain.mood = varied.mood = 50;
+    plain.hunger = varied.hunger = 0;  // only the diet may change the mood
+    ds.run_until(at(9, 15, 30));  // 10 hours, standing idle
+    ctx.check(std::abs(plain.mood - (50 + 10 * b.diet_monotony_mood_per_hour)) < 0.3 &&
+                  std::abs(varied.mood - (50 + 10 * b.diet_variety_mood_per_hour)) < 0.3,
+              "одноманітна їжа знижує настрій, різноманітна — піднімає: " + std::to_string(plain.mood) + " / " +
+                  std::to_string(varied.mood));
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "псування, погріб і раціон зберігаються: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// Forestry: saplings from the nursery are planted where trees were cut (no more than the forest held) and grow
+// into trees in tree_grow_days of the warm season.
+void t_forestry(Ctx& ctx) {
+    Opts o;
+    o.trees = 10;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_workshop("nursery", "Лісорозсадник_1", {-60, 60});
+    s.runtime().set_code(w.char_obj_id(0), "TREE = " + std::to_string(static_cast<int>(b.wood_per_tree)) + R"PY(
+forest = get("Ліс_1")
+nursery = get("Лісорозсадник_1")
+assert isinstance(nursery, Nursery)
+assert me.craft("sapling", nursery, amount=2) == 2
+try:
+    me.plant(forest)
+    assert False, "ліс повний"
+except ActionError:
+    pass
+assert forest.capacity == 10 and forest.room == 0
+storage = get("Склад_1")
+me.take(Axe, storage)
+assert me.chop_wood(forest, amount=TREE) == TREE  # одне дерево
+assert forest.trees_left == 9 and forest.room == 1, (forest.trees_left, forest.room)
+assert me.plant(forest) == 1  # місце лише для одного
+assert forest.saplings == 1 and forest.room == 0 and me.carrying["sapling"] == 1, me.carrying
+notify("посаджено")
+)PY");
+    s.run_until(at(1, 14));
+    ctx.check(find_log(w, "посаджено").has_value(), "саджанці з лісорозсадника — на вирубане місце, не більше, ніж уміщав ліс");
+    Object& forest = obj(w, "Ліс_1");
+    ctx.check(forest.saplings.size() == 1, "один саджанець росте");
+    forest.saplings[0] = 0.999;
+    s.run_until(at(2, 1));
+    ctx.check(forest.saplings.empty() && forest.trees_total == 11 && w.forest_trees_left(forest) == 10,
+              "саджанець виріс у дерево");
+    ctx.check(find_log(w, "виросло дерев: 1").has_value(), "журнал каже, скільки виросло за добу");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "саджанці зберігаються: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// Leisure: a bath in a heated bathhouse (water from the hands; fatigue, mood, cleanliness; once a day); beer from
+// the brewery drunk at the tavern (mood; the third mug a day — a hangover); resting at the tavern lifts the mood more.
+void t_leisure(Ctx& ctx) {
+    Opts o;
+    o.chars = 3;
+    o.bread = 20;
+    o.grain = 6;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_workshop("bathhouse", "Лазня_1", {-40, 40});
+    w.add_workshop("brewery", "Пивоварня_1", {-60, -60});
+    w.add_workshop("tavern", "Корчма_1", {40, 60});
+    obj(w, "Склад_1").resources["water"] = 7;
+    obj(w, "Склад_1").resources["wood"] = 4;
+    Character& bather = w.character(w.char_obj_id(0));
+    bather.fatigue = 50;
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+bath = get("Лазня_1")
+assert isinstance(bath, Bathhouse) and bath in buildings(HeatedWorkshop)
+me.pick_up(storage, "water", 2)
+try:
+    me.bathe(bath)
+    assert False, "лазня холодна"
+except NoItemError:
+    pass
+me.pick_up(storage, "wood", 2)
+me.heat(bath)
+fatigue, mood = me.fatigue, me.mood
+me.bathe(bath)
+assert me.is_clean and me.fatigue < fatigue - 25 and me.mood > mood + 9, (me.fatigue, me.mood)
+me.pick_up(storage, "water", 2)
+try:
+    me.bathe(bath)
+    assert False, "раз на добу"
+except ActionError:
+    pass
+notify("лазня")
+)PY");
+    s.runtime().set_code(w.char_obj_id(1), R"PY(
+storage = get("Склад_1")
+me.pick_up(storage, "grain", 6)
+me.pick_up(storage, "water", 3)
+assert me.craft("beer", get("Пивоварня_1")) == 3 and me.carrying == {"beer": 3}, me.carrying
+tavern = get("Корчма_1")
+mood = me.mood
+me.drink(tavern)
+me.drink(tavern)
+assert not me.has_hangover
+me.drink(tavern)
+assert me.has_hangover and me.mood > mood + 15, me.mood
+notify("корчма")
+)PY");
+    Character& rester = w.character(w.char_obj_id(2));
+    s.runtime().set_code(w.char_obj_id(2), "me.go_to(get(\"Корчма_1\"))\nme.rest(hours=2)\n");
+    s.run_until(at(1, 6, 30));
+    const double rest_start = rester.mood;  // at the tavern by now, resting
+    s.run_until(at(1, 7, 30));
+    ctx.check(std::abs(rester.mood - (rest_start + b.mood_rest_per_hour + b.tavern_rest_mood_per_hour)) < 0.3,
+              "відпочинок у корчмі піднімає настрій більше: " + std::to_string(rest_start) + " → " +
+                  std::to_string(rester.mood));
+    s.run_until(at(1, 16));
+    ctx.check(find_log(w, "лазня").has_value() && bather.clean_until > w.now(), "лазня: втома, настрій, чистота");
+    ctx.check(find_log(w, "корчма").has_value() && find_log(w, "забагато пива").has_value(), "пиво з пивоварні в корчмі; похмілля");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "лазня, пиво й похмілля зберігаються: " + err);
     ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
 }
 

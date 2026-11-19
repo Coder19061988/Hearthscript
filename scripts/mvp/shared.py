@@ -31,6 +31,17 @@ def hide_from_rain(me):
     me.wait_until(lambda: not world.is_raining, timeout=hours(3))
 
 
+@on(lambda: me.is_sick, priority=0)
+def lie_down_when_sick(me):
+    # Хворіють послаблені: хто мерзне, голодує чи виснажений. Лікарні в поселенні ще немає,
+    # тож хворий лежить удома, доки хвороба не мине: лежачи, здоров'я тане вп'ятеро повільніше.
+    notify("Хвороба — лежу вдома, доки не мине")
+    while me.is_sick:
+        eat_until(40)
+        me.go_home()
+        me.rest(hours=2)
+
+
 # ---- допоміжні функції
 
 def eat_until(limit):

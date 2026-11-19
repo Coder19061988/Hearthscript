@@ -9,7 +9,9 @@ const ITEM_NAMES := {
 	"eggs": "яйця", "meat": "м'ясо", "clothes": "звичайний одяг", "warm_clothes": "теплий одяг",
 	"axe": "сокира", "sickle": "серп", "scythe": "коса", "cow": "корова", "chicken": "курка", "scrap": "брухт",
 	"flax": "льон", "cloth": "тканина", "rags": "ганчір'я", "planks": "дошки", "bed": "ліжко",
-	"pickaxe": "кайло", "stone": "камінь", "ore": "руда", "charcoal": "вугілля", "iron": "залізо", "water": "вода"}
+	"pickaxe": "кайло", "stone": "камінь", "ore": "руда", "charcoal": "вугілля", "iron": "залізо", "water": "вода",
+	"herbs": "трави", "bandage": "бинти", "oil": "олія", "torch": "смолоскипи",
+	"smoked_meat": "копчене м'ясо", "cheese": "сир", "sapling": "саджанці", "beer": "пиво"}
 const STOCK_COLORS := {
 	"wood": Color(0.65, 0.45, 0.3), "bread": Color(0.95, 0.5, 0.15), "grain": Color(0.98, 0.95, 0.5),
 	"flour": Color(0.92, 0.92, 0.9), "hay": Color(0.4, 0.75, 0.4), "milk": Color(0.6, 0.8, 1.0),
@@ -17,7 +19,11 @@ const STOCK_COLORS := {
 	"warm_clothes": Color(0.75, 0.55, 0.9), "scrap": Color(0.55, 0.55, 0.6), "flax": Color(0.45, 0.55, 0.85),
 	"cloth": Color(0.85, 0.8, 0.65), "rags": Color(0.5, 0.45, 0.4), "planks": Color(0.85, 0.65, 0.4),
 	"bed": Color(0.6, 0.35, 0.25), "stone": Color(0.7, 0.7, 0.68), "ore": Color(0.6, 0.35, 0.25),
-	"charcoal": Color(0.25, 0.25, 0.25), "iron": Color(0.5, 0.55, 0.65), "water": Color(0.3, 0.55, 0.95)}
+	"charcoal": Color(0.25, 0.25, 0.25), "iron": Color(0.5, 0.55, 0.65), "water": Color(0.3, 0.55, 0.95),
+	"herbs": Color(0.45, 0.8, 0.5), "bandage": Color(0.95, 0.95, 0.9),
+	"oil": Color(0.9, 0.8, 0.3), "torch": Color(0.95, 0.5, 0.2),
+	"smoked_meat": Color(0.6, 0.3, 0.2), "cheese": Color(1.0, 0.85, 0.4),
+	"beer": Color(0.85, 0.6, 0.2)}
 
 var _text: RichTextLabel
 var _tabs: TabContainer
@@ -78,6 +84,7 @@ func update_stats(stats: Dictionary) -> void:
 		{"name": "голод", "color": Color(0.95, 0.6, 0.25), "values": stats.get("hunger", PackedFloat64Array())},
 		{"name": "тепло", "color": Color(0.95, 0.4, 0.35), "values": stats.get("warmth", PackedFloat64Array())},
 		{"name": "втома", "color": Color(0.55, 0.65, 0.95), "values": stats.get("fatigue", PackedFloat64Array())},
+		{"name": "настрій", "color": Color(0.85, 0.55, 0.9), "values": stats.get("mood", PackedFloat64Array())},
 	])
 	_coins_chart.set_data(days, [
 		{"name": "монети", "color": Color(1.0, 0.84, 0.35), "values": stats.get("coins", PackedFloat64Array())},

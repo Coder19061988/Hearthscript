@@ -128,6 +128,7 @@ func _finish() -> void:
 	failures.append_array(_check_outcome({"characters": 2, "start_day": 15, "start_hour": 23.5, "random_rain": false}, true))
 	failures.append_array(_check_animals())
 	failures.append_array(_check_trade())
+	failures.append_array(_check_hospital())
 	print("Godot smoke: %s, дров на складі %d, записів у журналі %d" % [smoke_time, wood, _main.ui._log_lines])
 	for f in failures:
 		printerr("FAIL: " + f)
@@ -233,6 +234,44 @@ func _check_animals() -> Array:
 	return problems
 
 
+## A built hospital shows its temperature and stove; an ill character is marked over the head and in the panel.
+func _check_hospital() -> Array:
+	var problems := []
+	var sim = _main.sim
+	sim.start({"characters": 2, "hospital": true, "church": true, "lantern": true, "cellar": true, "start_hour": 22.0, "sick": 1,
+		"random_rain": false})
+	_main._show_world()
+	var ill: Dictionary = sim.get_characters()[0]
+	_main.select_character(ill["id"])
+	_main._process(0.0)
+	for b in sim.get_buildings():
+		if b["name"] == "Лікарня_1":
+			var label: Label3D = _main.world_view._buildings[b["id"]]["label"]
+			if not b.has("temperature") or not label.text.contains("°C"):
+				problems.append("лікарня не показує температуру й піч: %s" % label.text)
+	var tag: Label = _main.world_view._people[ill["id"]]["label"]
+	if ill["illness_left"] <= 0.0 or not tag.text.contains("хворіє"):
+		problems.append("хворий персонаж не позначений над головою: %s" % tag.text)
+	if not _main.ui._info.text.contains("Хвороба"):
+		problems.append("панель персонажа не показує хворобу")
+	if not _main.ui._build_kinds.has("hospital") or not _main.ui._build_kinds.has("church"):
+		problems.append("лікарні чи церкви немає в меню «Будувати»")
+	for b in sim.get_buildings():
+		if b["name"] == "Церква_1" and (not b.has("graves") or _main.world_view._buildings[b["id"]]["graves"].size() == 0):
+			problems.append("церква не показує кладовища")
+	for b in sim.get_buildings():
+		if b["name"] == "Ліхтар_1" and (not b["lit"] or not _main.world_view._buildings[b["id"]]["light"].visible):
+			problems.append("запалений ліхтар не світить уночі")
+	for b in sim.get_buildings():
+		if b["name"] == "Погріб_1" and (not b["cellar"] or not _main.world_view._buildings.has(b["id"])):
+			problems.append("погріб не показано")
+	if not _main.ui._info.text.contains("Раціон"):
+		problems.append("панель персонажа не показує раціон")
+	if not _main.ui._info.text.contains("Настрій"):
+		problems.append("панель персонажа не показує настрій")
+	return problems
+
+
 ## The town hall window: coins, the merchant's prices, a hint that a trading post is needed.
 func _check_trade() -> Array:
 	var problems := []
@@ -258,8 +297,8 @@ func _check_trade() -> Array:
 	if sim.get_stats_size() != 4 or stock_chart._days.size() != 4 or stock_chart.series_count() == 0:
 		problems.append("діаграми управи не отримали знімків: %d / %d, ліній %d" % [sim.get_stats_size(),
 			stock_chart._days.size(), stock_chart.series_count()])
-	if ui._town_hall._people_chart.series_count() != 4:
-		problems.append("на діаграмі «Люди» немає здоров'я, голоду, тепла й втоми")
+	if ui._town_hall._people_chart.series_count() != 5:
+		problems.append("на діаграмі «Люди» немає здоров'я, голоду, тепла, втоми й настрою")
 	ui._town_hall.hide()
 	return problems
 

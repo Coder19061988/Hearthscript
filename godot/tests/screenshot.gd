@@ -4,7 +4,7 @@ extends SceneTree
 ## Arguments after "--": out=<png path>, hours=<game hours to advance before the shot>, help=1 (open the F1 window),
 ## construction=1 (a house blueprint that two characters build), save_dialog=1 (open the save dialog),
 ## outcome=won|lost (the end-of-game window: the first winter survived / everyone starved),
-## animals=1 (a barn with a cow and four chickens), town_hall=N (the «Управа» window on tab N: 1 — зведення, 2 — запаси, 3 — люди, 4 — монети), first_person=1 (the first-person view between the storage
+## animals=1 (a barn with a cow and four chickens), hospital=1 (a built hospital, the first character ill), church=1 (a built church), lantern=1 (a lit lantern by the storage at 21:30), town_hall=N (the «Управа» window on tab N: 1 — зведення, 2 — запаси, 3 — люди, 4 — монети), first_person=1 (the first-person view between the storage
 ## and the house, looking north).
 
 const BUILDERS := """storage = get("Склад_1")
@@ -28,7 +28,7 @@ me.move_into(site)
 var _main: Node
 var _frames := 0
 var _args := {"out": "user://screenshot.png", "hours": "3", "help": "0", "construction": "0", "save_dialog": "0",
-	"outcome": "", "animals": "0", "town_hall": "0", "first_person": "0"}
+	"outcome": "", "animals": "0", "hospital": "0", "church": "0", "lantern": "0", "town_hall": "0", "first_person": "0"}
 
 
 func _initialize() -> void:
@@ -46,6 +46,18 @@ func _process(_delta: float) -> bool:
 		if _args["animals"] == "1":
 			var options: Dictionary = _main.START_OPTIONS.duplicate()
 			options.merge({"barn": true, "cows": 1, "chickens": 4}, true)
+			_main.sim.start(options)
+			_main.sim.set_shared_code(_main.start_shared_code, false)
+			_main._show_world()
+		if _args["lantern"] == "1":
+			var options: Dictionary = _main.START_OPTIONS.duplicate()
+			options.merge({"lantern": true, "start_hour": 21.5}, true)
+			_main.sim.start(options)
+			_main.sim.set_shared_code(_main.start_shared_code, false)
+			_main._show_world()
+		if _args["hospital"] == "1":
+			var options: Dictionary = _main.START_OPTIONS.duplicate()
+			options.merge({"hospital": true, "sick": 1, "church": _args["church"] == "1"}, true)
 			_main.sim.start(options)
 			_main.sim.set_shared_code(_main.start_shared_code, false)
 			_main._show_world()

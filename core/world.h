@@ -23,7 +23,8 @@ struct Vec2 {
     double x = 0, y = 0;
 };
 
-enum class ObjKind { Storage, House, Forest, Field, Person, Board, Barn, Meadow, Animal, TownHall, TradingPost, Workshop, Deposit };
+enum class ObjKind { Storage, House, Forest, Field, Person, Board, Barn, Meadow, Animal, TownHall, TradingPost, Workshop, Deposit,
+                     Lantern };
 // "storage", "house", "forest", "field", "person", "board", "barn", "meadow", "animal", "town_hall",
 // "trading_post", "workshop" (Python prelude, saves)
 const char* kind_name(ObjKind k);
@@ -90,7 +91,9 @@ struct Object {
     std::vector<Garment> chest;  // clothes kept in the house
     int beds = 0;                // house: beds (furniture); residents in the order they came get them
     // Forest
-    int trees_total = 0;
+    int trees_total = 0;      // forest: trees that ever grew here (`capacity` — how many stand at most)
+    std::vector<double> saplings;  // forest: growth of every planted sapling (0..1)
+    int grown = 0;            // forest: saplings that became trees today, logged at midnight
     std::string deposit;      // deposit: "stone" (a quarry) / "ore" (a mine)
     int deposit_left = 0;     // deposit: units left
     int wood_taken = 0;  // units of wood chopped so far
@@ -98,6 +101,14 @@ struct Object {
     FieldState field_state = FieldState::Empty;
     std::string crop;         // what is sown or ripe: "grain" / "flax"
     double watered_until = 0; // field: watered (by hand or by rain) until this time
+    double death_time = -1;   // animal: when it died (an unburied body decays)
+    int graves = 0;           // church: buried at its cemetery
+    double last_service = -1; // church: when the last service ended
+    bool cellar = false;      // storage: a cellar, food spoils slower (cellar_spoil_factor)
+    std::map<std::string, double> spoil;  // storage: how far the next unit of each food has spoiled (0..1)
+    std::map<std::string, int> spoiled;   // storage: spoiled today, logged at midnight
+    double fuel = 0;          // lantern: oil left (units)
+    bool lit = false;         // lantern: burning; goes out at dawn or when the oil ends
     bool seeded = false;      // seed grain is in the ground (sowing started)
     double sow_done = 0;      // seconds of sowing work done
     double growth = 0;        // 0..1 while sown
@@ -153,6 +164,9 @@ struct PersonView {
     ToolItem tool;
     Garment clothes;
     std::map<std::string, int> carrying;
+    double illness_left = 0, injury_left = 0;  // hours
+    bool illness_treated = false, injury_treated = false;
+    double mood = 0;
 };
 
 // What a character knows about an object (limited knowledge, План_гри.md §1): a copy of its state
@@ -173,6 +187,17 @@ struct Character {
     ToolItem tool;        // in hands (empty kind = none)
     Garment clothes;      // worn; empty kind = none
     std::map<std::string, int> carrying;
+    // Illness and injury: hours until they pass (0 = healthy); treated in the hospital they pass sooner.
+    double illness_left = 0, injury_left = 0;
+    bool illness_treated = false, injury_treated = false;
+    double mood = 0;      // 0..100; below mood_low_threshold the work is slower
+    bool buried = false;  // dead and buried at a church; an unburied body decays (mood, illness)
+    double torch_left = 0;  // hours left of the torch burning in the hands (another one is lit from `carrying`)
+    std::map<std::string, double> ate;  // food -> when the character last ate it (the diet)
+    double clean_until = 0;     // after a bath: lower chances to fall ill
+    double last_bath = -1;
+    double hangover_until = 0;  // too much beer: slower work, more injuries
+    int drink_day = -1, beers = 0;  // mugs drunk on that day
     int home = -1;  // house object id
     // Absolute game time this character has been simulated up to. Within a tick
     // every character advances independently; Simulation::tick() syncs them.
@@ -184,6 +209,7 @@ struct Character {
     // Log bookkeeping
     bool idle_warned = false, hunger_warned = false, fatigue_warned = false, cold_warned = false;
     int health_warn_level = 100;
+    bool mood_warned = false;
     double death_time = -1;
     std::string death_cause;
 };
@@ -235,7 +261,8 @@ enum class ActionKind {
     Heat, Wear, Sow, Harvest, Craft,
     Deliver, Build, MoveInto,
     Post, Read,
-    Mow, Feed, Milk, CollectEggs, Slaughter, Mine, Water,
+    Mow, Feed, Milk, CollectEggs, Slaughter, Mine, Water, GatherHerbs, Treat, HoldService, Bury, Light, Plant,
+    Bathe, Drink,
     Order,
     Dismantle,
 };
@@ -255,6 +282,7 @@ struct Action {
     bool noop = false;
     bool transferred = false;
     bool reserved = false;     // holds a reservation of the tool params.tool_id in `target`
+    int place = -1;            // bury: the church whose cemetery the body goes to
     double wait_target = kInf;
     double wait_timeout = kInf;
     bool wait_returns_bool = false;
@@ -266,7 +294,7 @@ struct StatSample {
     std::map<std::string, int> stock;  // resources in all built storages together
     int coins = 0;                     // in the town hall
     int people = 0;                    // living characters
-    double health = 0, hunger = 0, warmth = 0, fatigue = 0;  // averages over the living
+    double health = 0, hunger = 0, warmth = 0, fatigue = 0, mood = 0;  // averages over the living
     int animals = 0;                   // living animals
 };
 
@@ -291,6 +319,7 @@ public:
     int add_field(const std::string& name, Vec2 pos);
     int add_character(const std::string& name, int home, Vec2 pos, double hunger, double fatigue, double health);
     int add_board(const std::string& name, Vec2 pos);
+    int add_lantern(const std::string& name, Vec2 pos);
     int add_barn(const std::string& name, Vec2 pos);    // a finished barn (scene; the game builds them)
     int add_town_hall(const std::string& name, Vec2 pos);    // with the start coins
     int add_trading_post(const std::string& name, Vec2 pos);  // a finished post (scene; the game builds them)
@@ -307,6 +336,7 @@ public:
     void add_rain(double start, double end);
     // A blueprint placed by the player (any time): returns its id, or -1 and sets `error`.
     // For a workshop `workshop` is its type (Balance::workshops).
+    // `workshop`: the workshop type of a Workshop, or "cellar" for a Storage that is a cellar.
     int add_blueprint(ObjKind kind, const std::string& name, Vec2 pos, std::string& error, const std::string& workshop = "");
 
     // Player's global variables: characters read them, only the player changes them.
@@ -328,9 +358,18 @@ public:
     double travel_seconds(const Character& c, Vec2 to) const;
     int forest_units_left(const Object& f) const;
     int forest_trees_left(const Object& f) const;
+    int forest_room(const Object& f) const;  // free places for saplings: capacity - standing trees - saplings
     std::map<std::string, int> materials_missing(const Object& o) const;
-    int residents_count(int house_id) const;
-    bool has_bed(const Character& c) const;  // a bed in the character's house is theirs  // living characters whose home is this house
+    int residents_count(int house_id) const;  // living characters whose home is this house
+    bool has_bed(const Character& c) const;  // a bed in the character's house is theirs
+    bool has_stove(const Object& o) const;   // a house or a workshop heated like one (the hospital)
+    const Object* hospital_at(const Character& c) const;  // the hospital the character stands at
+    const Object* nearest_church(Vec2 from) const;          // a built one; nullptr if there is none
+    const Object* workshop_at(const Character& c, const std::string& type) const;  // a built one the character stands at
+    bool is_body(const Object& o) const;  // a dead person or animal not buried yet
+    bool lit_near(const Character& c) const;  // daylight, or a lit lantern within lantern_radius_m
+    double spoil_per_day(const std::string& food) const;  // share of a stock spoiling a day (warm season, no cellar)
+    std::vector<std::string> diet(const Character& c) const;  // kinds of food eaten over the last diet_days
     int animals_count(int barn_id) const;     // living animals in this barn
     bool is_raining_at(double t) const;
     bool is_night_at(double t) const;
@@ -369,7 +408,8 @@ public:
     // --- time
     std::vector<std::string> begin_tick(double t0, double t1);  // returns events that fired in [t0, t1)
     void end_tick(double t1);
-    void pass_time(Character& c, double seconds, Activity a);
+    // `danger`: extra chance per hour of an injury at this work (the mine, the forge).
+    void pass_time(Character& c, double seconds, Activity a, double danger = 0);
 
     // --- actions (called by the script runtime from inside a character's coroutine)
     BeginResult begin_action(int char_obj, const std::string& kind, int target, const ActionParams& p);
@@ -392,6 +432,12 @@ private:
     void update_environment(double t0, double t1);
     double fatigue_rate(Activity a) const;
     const Object* house_at(const Character& c) const;
+    const Object* shelter_at(const Character& c) const;  // a house or a hospital: warm inside, dry in the rain
+    double work_factor(const Character& c, bool outdoors) const;  // rain, fatigue, illness, injury
+    void catch_ailments(Character& c, double hours, Activity a, double danger);
+    bool works_in_dark(Character& c, double hours, Activity a);
+    void spoil(Object& storage, double t, double dt);  // heavy work at night without light (burns a torch)
+    bool chance(double expected);  // an event with this expected count happens (health_rng_)
     bool at(const Character& c, Vec2 p) const;
     double walk(Character& c, Vec2 dest, double max_t);
     double handle(Character& c, Action& a, double total, double max_t, Activity act, bool& finished);
@@ -437,6 +483,8 @@ private:
     int next_tool_id_ = 1;
     Merchant merchant_;
     std::mt19937_64 trade_rng_;  // prices; separate from the weather, so trade never changes the rain
+    int decaying_bodies_ = 0;  // unburied bodies older than body_decay_hours; counted every tick
+    std::mt19937_64 health_rng_;  // illness and injuries; separate, so they never change the rain or the prices
     std::vector<StatSample> stats_;
 };
 

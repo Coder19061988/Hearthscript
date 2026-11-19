@@ -17,10 +17,14 @@ const TOWN_HALL_SIZE := Vector3(6.0, 4.6, 5.0)
 const WORKSHOP_SIZE := Vector3(5.0, 3.0, 4.5)
 ## Walls of every workshop type; a smithy also gets a chimney and an anvil.
 const WORKSHOP_COLORS := {"smithy": Color(0.42, 0.4, 0.4), "tailor": Color(0.75, 0.62, 0.7),
-	"sawmill": Color(0.62, 0.48, 0.3), "carpentry": Color(0.7, 0.55, 0.35), "kiln": Color(0.5, 0.36, 0.3)}
+	"sawmill": Color(0.62, 0.48, 0.3), "carpentry": Color(0.7, 0.55, 0.35), "kiln": Color(0.5, 0.36, 0.3),
+	"hospital": Color(0.88, 0.86, 0.8), "church": Color(0.92, 0.9, 0.84),
+	"bathhouse": Color(0.5, 0.42, 0.35), "brewery": Color(0.65, 0.5, 0.3), "tavern": Color(0.7, 0.45, 0.3)}
 const CRAFT_SHORT := {"flour": "меле", "bread": "пече", "axe": "кує", "sickle": "кує", "scythe": "кує",
 	"cloth": "тче", "clothes": "шиє", "warm_clothes": "шиє", "planks": "пиляє", "bed": "столярує",
-	"charcoal": "палить", "iron": "плавить", "pickaxe": "кує", "water": "набирає воду"}
+	"charcoal": "палить", "iron": "плавить", "pickaxe": "кує", "water": "набирає воду",
+	"bandage": "шиє бинти", "oil": "тисне олію", "torch": "робить смолоскипи",
+	"smoked_meat": "коптить", "cheese": "варить сир", "sapling": "вирощує саджанці", "beer": "варить пиво"}
 const TRADING_POST_SIZE := Vector3(5.0, 2.6, 3.0)
 const MEADOW_SIZE := 12.0
 const DEPOSIT_SIZE := 6.0  # a quarry or a mine
@@ -50,7 +54,9 @@ const ACTION_SHORT := {
 	"wear": "переодягається", "sow": "сіє", "harvest": "жне", "craft": "працює",
 	"deliver": "несе на будову", "build": "будує", "move_into": "переселяється",
 	"post": "пише на дошці", "read": "читає дошку",
-	"mine": "добуває", "water": "поливає", "mow": "косить", "feed": "годує", "milk": "доїть", "collect_eggs": "збирає яйця", "slaughter": "забиває",
+	"mine": "добуває", "water": "поливає", "gather_herbs": "збирає трави", "treat": "лікує",
+	"hold_service": "править службу", "bury": "ховає", "light": "запалює ліхтар", "plant": "садить",
+	"bathe": "миється", "drink": "п'є пиво", "mow": "косить", "feed": "годує", "milk": "доїть", "collect_eggs": "збирає яйця", "slaughter": "забиває",
 	"order": "замовляє", "dismantle": "розбирає"}
 const CARGO_COLORS := {"wood": Color(0.62, 0.42, 0.22), "grain": Color(0.9, 0.78, 0.4),
 	"flour": Color(0.95, 0.93, 0.85), "bread": Color(0.75, 0.5, 0.25), "hay": Color(0.8, 0.75, 0.35),
@@ -60,7 +66,8 @@ const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "з
 	"warm_clothes": "теплий одяг", "axe": "сокира", "sickle": "серп", "scythe": "коса", "cow": "корова",
 	"chicken": "курка", "scrap": "брухт", "flax": "льон", "cloth": "тканина", "rags": "ганчір'я",
 	"planks": "дошки", "bed": "ліжко", "pickaxe": "кайло", "stone": "камінь", "ore": "руда",
-	"charcoal": "вугілля", "iron": "залізо", "water": "вода"}
+	"charcoal": "вугілля", "iron": "залізо", "water": "вода", "herbs": "трави", "bandage": "бинти", "oil": "олія",
+	"torch": "смолоскипи", "smoked_meat": "копчене м'ясо", "cheese": "сир", "sapling": "саджанці", "beer": "пиво"}
 
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -150,13 +157,20 @@ func update_world(buildings: Array, characters: Array, animals: Array, time_of_d
 			"house":
 				_update_house(entry, b)
 			"forest":
-				_set_text(entry["label"], "%s\nдерев: %d" % [b["name"], b["trees_left"]])
+				var saplings: int = b["saplings"]
+				_set_text(entry["label"], "%s\nдерев: %d%s" % [b["name"], b["trees_left"],
+					" · саджанців %d" % saplings if saplings > 0 else ""])
 				var trees: Array = entry["trees"]
-				var visible_count := int(round(trees.size() * float(b["trees_left"]) / maxf(1.0, b["trees_total"])))
+				var visible_count := int(round(trees.size() * float(b["trees_left"]) / maxf(1.0, b["capacity"])))
 				for i in trees.size():
 					trees[i].visible = i < visible_count
 			"field":
 				_update_field(entry, b)
+			"lantern":
+				var lit: bool = b["lit"]
+				_set_text(entry["label"], "%s\n%s" % [b["name"], "горить" if lit else "олії %.1f" % b["fuel"]])
+				entry["light"].visible = lit
+				entry["lamp"].material_override = _material(Color(1.0, 0.85, 0.4) if lit else Color(0.35, 0.33, 0.3))
 			"board":
 				_set_text(entry["label"], "%s\nзаписів: %d" % [b["name"], b["notes"]])
 				entry["paper"].visible = b["notes"] > 0
@@ -168,6 +182,15 @@ func update_world(buildings: Array, characters: Array, animals: Array, time_of_d
 				_set_text(entry["label"], "%s · монет %d" % [b["name"], b["coins"]])
 			"trading_post":
 				_update_trading_post(entry, b)
+			"workshop":
+				if b.has("graves"):
+					_set_text(entry["label"], "%s\nмогил: %d" % [b["name"], b["graves"]] if b["graves"] > 0 else b["name"])
+					for i in entry["graves"].size():
+						entry["graves"][i].visible = i < b["graves"]
+				if b.has("firewood"):
+					var state := "у печі %.1f дров" % b["firewood"] if b["heated"] else "піч холодна"
+					_set_text(entry["label"], "%s\n%+.0f°C · %s" % [b["name"], b["temperature"], state])
+					entry["smoke"].emitting = b["heated"]
 			"deposit":
 				_set_text(entry["label"], "%s\n%s: %d" % [b["name"], RESOURCE_NAMES.get(b["resource"], b["resource"]), b["left"]])
 			"meadow":
@@ -287,8 +310,14 @@ func _create_building(b: Dictionary, key: String) -> Dictionary:
 		return entry
 	match kind:
 		"storage":
-			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, 2.0, 0), STORAGE_SIZE, Color(0.55, 0.38, 0.22)))
-			_add_box(root, base + BUILDING_OFFSET + Vector3(0, 4.3, 0), Vector3(6.6, 0.6, 5.6), Color(0.4, 0.27, 0.16))
+			if b.get("cellar", false):  # a cellar: a low stone mound with a door
+				_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, 0.8, 0), Vector3(STORAGE_SIZE.x, 1.6,
+					STORAGE_SIZE.z), Color(0.5, 0.5, 0.47)))
+				_add_box(root, base + BUILDING_OFFSET + Vector3(0, 0.7, STORAGE_SIZE.z * 0.5 + 0.05), Vector3(1.4, 1.3, 0.1),
+					Color(0.38, 0.26, 0.15))
+			else:
+				_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, 2.0, 0), STORAGE_SIZE, Color(0.55, 0.38, 0.22)))
+				_add_box(root, base + BUILDING_OFFSET + Vector3(0, 4.3, 0), Vector3(6.6, 0.6, 5.6), Color(0.4, 0.27, 0.16))
 			entry["pile"] = _block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(4.5, 0.0, 0.0),
 				Vector3(2.0, 1.0, 3.0), Color(0.62, 0.42, 0.22)))
 			entry["label"] = _add_label(root, base + BUILDING_OFFSET * 2.0 + Vector3(0, 8.0, 0), b["name"])
@@ -333,6 +362,27 @@ func _create_building(b: Dictionary, key: String) -> Dictionary:
 			if type == "smithy":
 				_add_box(root, base + BUILDING_OFFSET + Vector3(0, 0.5, WORKSHOP_SIZE.z * 0.5 + 0.6), Vector3(0.9, 1.0, 0.6),
 					Color(0.2, 0.2, 0.22))  # the anvil at the door
+			if type == "church":  # a bell tower with a cross; graves behind
+				var tower := base + BUILDING_OFFSET + Vector3(-1.4, 0, 0)
+				_add_box(root, tower + Vector3(0, WORKSHOP_SIZE.y + 1.5, 0), Vector3(1.4, 3.0, 1.4), Color(0.92, 0.9, 0.84))
+				_add_box(root, tower + Vector3(0, WORKSHOP_SIZE.y + 3.6, 0), Vector3(0.15, 1.2, 0.15), Color(0.85, 0.7, 0.3))
+				_add_box(root, tower + Vector3(0, WORKSHOP_SIZE.y + 3.8, 0), Vector3(0.7, 0.15, 0.15), Color(0.85, 0.7, 0.3))
+				var graves := []
+				for i in 12:
+					var stone := _add_box(root, base + BUILDING_OFFSET + Vector3(-2.0 + (i % 6) * 0.8,
+						0.3, -WORKSHOP_SIZE.z * 0.5 - 1.0 - (i / 6) * 1.0), Vector3(0.4, 0.6, 0.15), Color(0.5, 0.5, 0.5))
+					stone.visible = false
+					graves.append(stone)
+				entry["graves"] = graves
+			if type == "hospital":  # a red cross over the door
+				var cross := Color(0.8, 0.15, 0.15)
+				var front := base + BUILDING_OFFSET + Vector3(0, WORKSHOP_SIZE.y * 0.65, WORKSHOP_SIZE.z * 0.5 + 0.05)
+				_add_box(root, front, Vector3(0.3, 1.0, 0.1), cross)
+				_add_box(root, front, Vector3(1.0, 0.3, 0.1), cross)
+			if b.has("firewood"):  # heated like a house: a chimney with smoke
+				_add_box(root, base + BUILDING_OFFSET + Vector3(1.6, WORKSHOP_SIZE.y + 1.0, -1.0), Vector3(0.6, 1.6, 0.6),
+					Color(0.45, 0.42, 0.4))
+				entry["smoke"] = _add_smoke(root, base + BUILDING_OFFSET + Vector3(1.6, WORKSHOP_SIZE.y + 2.0, -1.0))
 			entry["label"] = _add_label(root, base + BUILDING_OFFSET + Vector3(0, WORKSHOP_SIZE.y + 3.0, 0), b["name"])
 		"trading_post":
 			var timber := Color(0.55, 0.38, 0.22)
@@ -374,6 +424,18 @@ func _create_building(b: Dictionary, key: String) -> Dictionary:
 			entry["grass"] = _add_box(root, base + Vector3(0, 0.3, 0), Vector3(MEADOW_SIZE * 0.9, 0.6, MEADOW_SIZE * 0.9),
 				Color(0.45, 0.72, 0.28))
 			entry["label"] = _add_label(root, base + Vector3(-MEADOW_SIZE * 0.5 - 2.0, 2.5, 0), b["name"])
+		"lantern":  # a post with a lamp; lit at night — a real light
+			_block(entry, _add_box(root, base + Vector3(0, 1.4, 0), Vector3(0.25, 2.8, 0.25), Color(0.4, 0.3, 0.2)))
+			entry["lamp"] = _add_box(root, base + Vector3(0, 3.0, 0), Vector3(0.6, 0.6, 0.6), Color(0.35, 0.33, 0.3))
+			var light := OmniLight3D.new()
+			light.position = base + Vector3(0, 3.2, 0)
+			light.light_color = Color(1.0, 0.8, 0.45)
+			light.light_energy = 2.0
+			light.omni_range = 9.0
+			light.visible = false
+			root.add_child(light)
+			entry["light"] = light
+			entry["label"] = _add_label(root, base + Vector3(0, 4.4, 0), b["name"])
 		"board":
 			var wood := Color(0.5, 0.35, 0.2)
 			for x in [-1.2, 1.2]:
@@ -438,7 +500,7 @@ func _update_storage(entry: Dictionary, b: Dictionary) -> void:
 		broken_count += broken[kind]
 	var farm := []  # products of the meadow and the barn, when there are any
 	for r in ["hay", "milk", "eggs", "meat", "scrap", "flax", "cloth", "rags", "planks", "bed", "stone", "ore", "charcoal",
-			"iron"]:
+			"iron", "herbs", "bandage", "oil", "torch", "smoked_meat", "cheese", "sapling", "beer"]:
 		if res.get(r, 0) > 0:
 			farm.append("%s %d" % [RESOURCE_NAMES[r], res[r]])
 	_set_text(entry["label"], "%s\nдрова %d · хліб %d · зерно %d · борошно %d%s\nсокир %d · серпів %d · кіс %d%s%s" % [
@@ -513,6 +575,8 @@ func _footprint(kind: String) -> Vector3:
 			return TRADING_POST_SIZE
 		"deposit":
 			return Vector3(DEPOSIT_SIZE, 1.5, DEPOSIT_SIZE)
+		"lantern":
+			return Vector3(0.6, 3.3, 0.6)
 		_:
 			return WORKSHOP_SIZE  # any workshop type
 
@@ -535,6 +599,10 @@ func _update_person(c: Dictionary, index: int, slot: int, selected_id: int, came
 	root.position = _to_scene(c["position"]) + Vector3(cos(angle), 0.0, sin(angle)) * radius
 
 	var alive: bool = c["alive"]
+	root.visible = not c["buried"]  # buried at a church: gone from the map
+	if c["buried"]:
+		p["label"].visible = false
+		return
 	var body: MeshInstance3D = p["body"]
 	body.rotation_degrees.x = 0.0 if alive else 90.0
 	body.position.y = 0.9 if alive else 0.45
@@ -557,6 +625,10 @@ func _update_person(c: Dictionary, index: int, slot: int, selected_id: int, came
 	p["ring"].visible = id == selected_id
 
 	var status := "смерть" if not alive else _status_text(c)
+	if alive and c["illness_left"] > 0.0:
+		status += " · хворіє"
+	if alive and c["injury_left"] > 0.0:
+		status += " · травма"
 	var tag: Label = p["label"]
 	var text := "%s · %s" % [c["name"], status]
 	if tag.text != text:
