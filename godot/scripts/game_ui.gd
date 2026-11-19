@@ -9,7 +9,7 @@ signal code_applied(code: String)         # the selected character's own code
 signal shared_code_applied(code: String)  # the shared code of the settlement
 signal character_selected(id: int)
 signal restart_requested
-signal build_requested(kind: String)      # "house" / "storage" / "field" / "barn" / "board": start choosing a place
+signal build_requested(kind: String)      # "house" / "storage" / "field" / "barn" / "trading_post" / "board"
 signal blueprint_named(name: String)      # the name dialog was confirmed
 signal blueprint_cancelled
 signal global_set(name: String, text: String)
@@ -23,6 +23,7 @@ signal first_person_requested            # the "Від першої особи" 
 
 const CodePane := preload("res://scripts/code_pane.gd")
 const OutcomeDialog := preload("res://scripts/outcome_dialog.gd")
+const TownHallDialog := preload("res://scripts/town_hall_dialog.gd")
 const HelpText := preload("res://scripts/help_text.gd")
 
 const SAVES_DIR := "user://saves"
@@ -30,21 +31,27 @@ const PANEL_WIDTH := 560
 const LOG_HEIGHT := 200
 const LOG_LIMIT := 400
 const SPEEDS := [0.0, 1.0, 3.0, 10.0]
-const BUILD_KINDS := ["house", "storage", "field", "barn", "board"]
-const BUILD_NAMES := {"house": "Будинок", "storage": "Склад", "field": "Поле", "barn": "Хлів", "board": "Дошка оголошень"}
+
+## What a character makes by a recipe (me.craft, me.grind, me.bake).
+const CRAFT_NAMES := {"flour": "меле зерно", "bread": "пече хліб", "axe": "кує сокиру", "sickle": "кує серп",
+	"scythe": "кує косу", "cloth": "тче тканину", "clothes": "шиє одяг", "warm_clothes": "шиє теплий одяг",
+	"planks": "пиляє дошки", "bed": "робить ліжко", "charcoal": "палить вугілля", "iron": "плавить залізо",
+	"pickaxe": "кує кайло", "water": "набирає воду"}
 const ACTION_NAMES := {
 	"go_to": "іде до", "go_home": "іде додому", "take": "бере інструмент", "put_back": "повертає інструмент",
 	"chop_wood": "рубає дрова", "drop": "кладе все на склад", "pick_up": "бере зі складу", "eat": "їсть",
 	"sleep": "спить", "rest": "відпочиває", "wait": "чекає", "heat": "топить піч", "wear": "переодягається",
-	"sow": "сіє", "harvest": "жне", "grind": "меле зерно", "bake": "пече хліб",
+	"sow": "сіє", "harvest": "жне", "craft": "виготовляє",
 	"deliver": "несе матеріали на будову", "build": "будує", "move_into": "переселяється",
 	"post": "пише на дошці оголошень", "read": "читає дошку оголошень",
-	"mow": "косить сіно", "feed": "годує тварину", "milk": "доїть корову", "collect_eggs": "збирає яйця",
-	"slaughter": "забиває тварину",
-}
+	"mine": "добуває", "water": "поливає поле", "mow": "косить сіно", "feed": "годує тварину", "milk": "доїть корову", "collect_eggs": "збирає яйця",
+	"slaughter": "забиває тварину", "order": "залишає замовлення купцю", "dismantle": "розбирає інструмент"}
 const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "зерно", "flour": "борошно",
-	"hay": "сіно", "milk": "молоко", "eggs": "яйця", "meat": "м'ясо"}
-const TOOL_NAMES := {"axe": "сокира", "sickle": "серп", "scythe": "коса"}
+	"hay": "сіно", "milk": "молоко", "eggs": "яйця", "meat": "м'ясо", "clothes": "звичайний одяг",
+	"warm_clothes": "теплий одяг", "scrap": "брухт", "flax": "льон", "cloth": "тканина", "rags": "ганчір'я",
+	"planks": "дошки", "bed": "ліжко", "stone": "камінь", "ore": "руда", "charcoal": "вугілля", "iron": "залізо",
+	"water": "вода"}
+const TOOL_NAMES := {"axe": "сокира", "sickle": "серп", "scythe": "коса", "pickaxe": "кайло"}
 const CLOTHES_NAMES := {"clothes": "звичайний", "warm_clothes": "теплий"}
 const LOG_COLORS := {
 	"info": "#d8d8d8", "notify": "#8fd0ff", "print": "#a8a8a8",
@@ -79,6 +86,13 @@ var _name_caption: Label
 var _file_dialog: FileDialog
 var _file_dialog_saving := false
 var _outcome: OutcomeDialog
+var _town_hall: TownHallDialog
+var _build_costs := {}        # KindleSimulation.get_build_costs()
+var _build_kinds: Array[String] = []  # kind of every item of the "Будувати" menu
+var _town_hall_button: Button
+var _merchant := {}      # the last KindleSimulation.get_merchant()
+var _merchant_status := ""  # "купець через 2 дн." — shown before the storages in the top bar
+var _trade_buildings := []
 var _fatal: Label
 
 var _selected := -1
@@ -184,6 +198,9 @@ func _ready() -> void:
 	_file_dialog.file_selected.connect(_on_file_selected)
 	root.add_child(_file_dialog)
 
+	_town_hall = TownHallDialog.new()
+	root.add_child(_town_hall)
+
 	_outcome = OutcomeDialog.new()
 	_outcome.closed.connect(func(survived: bool) -> void: outcome_closed.emit(survived))
 	_outcome.restart_pressed.connect(func() -> void: restart_requested.emit())
@@ -228,10 +245,15 @@ func _build_top_bar() -> Control:
 	_build_menu.text = "Будувати ▾"
 	_build_menu.flat = false
 	_build_menu.focus_mode = Control.FOCUS_NONE
-	for kind in BUILD_KINDS:
-		_build_menu.get_popup().add_item(BUILD_NAMES[kind])
-	_build_menu.get_popup().index_pressed.connect(func(index: int) -> void: build_requested.emit(BUILD_KINDS[index]))
+	_build_menu.get_popup().index_pressed.connect(func(index: int) -> void: build_requested.emit(_build_kinds[index]))
 	row.add_child(_build_menu)
+
+	_town_hall_button = Button.new()
+	_town_hall_button.text = "Управа"
+	_town_hall_button.tooltip_text = "Монети, ціни купця, замовлення й залишки на складах"
+	_town_hall_button.focus_mode = Control.FOCUS_NONE
+	_town_hall_button.pressed.connect(func() -> void: _town_hall.open(_merchant, _trade_buildings))
+	row.add_child(_town_hall_button)
 
 	_storage_label = Label.new()
 	_storage_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -407,16 +429,29 @@ func set_speed(value: float) -> void:
 		_speed_buttons[key].set_pressed_no_signal(key == value)
 
 
+## The "Будувати" menu from KindleSimulation.get_build_costs(): name, materials and hours of every kind.
 func set_build_costs(costs: Dictionary) -> void:
+	_build_costs = costs
+	_build_kinds.clear()
 	var popup := _build_menu.get_popup()
-	for i in BUILD_KINDS.size():
-		var kind: String = BUILD_KINDS[i]
-		var cost: Dictionary = costs.get(kind, {})
-		var wood: int = cost.get("wood", 0)
-		var hours: float = cost.get("hours", 0.0)
-		var hours_text := ("%d" % int(hours)) if is_equal_approx(hours, roundf(hours)) else ("%.1f" % hours)
-		var text := "%s — %s%s год роботи" % [BUILD_NAMES[kind], "%d дров, " % wood if wood > 0 else "", hours_text]
-		popup.set_item_text(i, text)
+	popup.clear()
+	for kind in costs:
+		var cost: Dictionary = costs[kind]
+		var parts := []
+		for res in cost["materials"]:
+			parts.append("%s %d" % [RESOURCE_NAMES.get(res, res), cost["materials"][res]])
+		var hours: float = cost["hours"]
+		parts.append(("%d" % int(hours) if is_equal_approx(hours, roundf(hours)) else "%.1f" % hours) + " год роботи")
+		popup.add_item("%s — %s" % [cost["name"], ", ".join(parts)])
+		_build_kinds.append(kind)
+
+
+func build_name(kind: String) -> String:
+	return _build_costs.get(kind, {}).get("name", kind)
+
+
+func build_prefix(kind: String) -> String:
+	return _build_costs.get(kind, {}).get("prefix", kind)
 
 
 func ask_save_path(default_name: String) -> void:
@@ -456,7 +491,7 @@ func set_first_person(on: bool) -> void:
 
 
 func ask_blueprint_name(kind: String, default_name: String) -> void:
-	_name_caption.text = "Назва для креслення «%s» (за нею код знаходить будівлю: get(\"…\"))" % BUILD_NAMES.get(kind, kind)
+	_name_caption.text = "Назва для креслення «%s» (за нею код знаходить будівлю: get(\"…\"))" % build_name(kind)
 	_name_edit.text = default_name
 	_name_dialog.popup_centered(Vector2i(460, 130))
 	_name_edit.grab_focus()
@@ -504,6 +539,7 @@ func update_status(time_text: String, raining: bool, night: bool, winter: bool, 
 			var res: Dictionary = b["resources"]
 			parts.append("%s: хліб %d, зерно %d, дрова %d, сіно %d" % [b["name"], res.get("bread", 0), res.get("grain", 0),
 				res.get("wood", 0), res.get("hay", 0)])
+	parts.push_front(_merchant_status)
 	_storage_label.text = "   ".join(parts)
 
 
@@ -526,6 +562,8 @@ func update_character(c: Dictionary, knowledge: Array = []) -> void:
 		var action: String = c["action"]
 		if action != "":
 			var text: String = ACTION_NAMES.get(action, action)
+			if action == "craft":
+				text = CRAFT_NAMES.get(c["action_item"], "виготовляє: " + c["action_item"])
 			if c["action_target"] != "":
 				text += " → " + c["action_target"]
 			lines.append("Дія: " + text)
@@ -541,7 +579,7 @@ func update_character(c: Dictionary, knowledge: Array = []) -> void:
 		for res in carried:
 			carrying.append("%s ×%d" % [RESOURCE_NAMES.get(res, res), carried[res]])
 		lines.append("Дім: %s · Одяг: %s · Інструмент: %s" % [
-			c["home"] if c["home"] != "" else "—", CLOTHES_NAMES.get(c["clothes"], "—"), _tool_text(c)])
+			c["home"] if c["home"] != "" else "—", _clothes_text(c), _tool_text(c)])
 		lines.append("Несе: %s" % (", ".join(carrying) if not carrying.is_empty() else "—"))
 		var known := []
 		for k in knowledge:
@@ -581,6 +619,24 @@ func clear_log() -> void:
 	_log_lines = 0
 
 
+## Trade state for the "Управа" button and window: who the merchant is, prices, posts, storages.
+func update_trade(merchant: Dictionary, buildings: Array) -> void:
+	_merchant = merchant
+	_trade_buildings = buildings
+	_merchant_status = "купець на посту" if merchant.get("here", false) else "купець через %d дн." % merchant.get("days_until", 0)
+	if _town_hall.visible:
+		_town_hall.refresh(merchant, buildings)
+
+
+## Charts of the town hall window: refill them only while it is open and new samples came.
+func wants_stats(samples: int) -> bool:
+	return _town_hall.wants_stats(samples)
+
+
+func update_stats(stats: Dictionary) -> void:
+	_town_hall.update_stats(stats)
+
+
 func show_help() -> void:
 	_help.popup_centered()
 
@@ -609,6 +665,15 @@ func _need(value: float, threshold: float, low_is_bad: bool) -> String:
 
 
 ## The tool in hands with its condition: "сокира 64%", "сокира (зламана)", "—".
+func _clothes_text(c: Dictionary) -> String:
+	var clothes: String = c["clothes"]
+	if clothes == "":
+		return "[color=#ff7070]немає[/color]"
+	var condition: float = c["clothes_condition"]
+	var text := "%s %d%%" % [CLOTHES_NAMES.get(clothes, clothes), int(ceil(condition))]
+	return "[color=#f0b45a]%s[/color]" % text if condition < 25.0 else text
+
+
 func _tool_text(c: Dictionary) -> String:
 	var tool: String = c["tool"]
 	if tool == "":

@@ -1,6 +1,7 @@
 #include "simulation.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace kindle {
@@ -14,14 +15,20 @@ constexpr int kNameCount = sizeof(kNames) / sizeof(kNames[0]);
 void build_start_scene(World& world, const StartScene& scene) {
     // Distances from the balance doc: house 60 m from the storage, forest 300 m from the storage.
     // The field is ~170 m from the storage, on the other side from the forest.
-    world.add_storage("Склад_1", {0, 0}, {{"axe", scene.axes}, {"sickle", scene.sickles}, {"scythe", scene.scythes}},
-                      {{"bread", scene.bread}, {"wood", 0}, {"grain", scene.grain}, {"flour", 0}});
+    world.add_storage("Склад_1", {0, 0}, {{"axe", scene.axes}, {"sickle", scene.sickles}, {"scythe", scene.scythes},
+                                                {"pickaxe", scene.pickaxes}},
+                      {{"bread", scene.bread}, {"wood", 0}, {"grain", scene.grain}, {"flour", 0},
+                       {"flax", scene.flax}});
     const int warm_clothes = scene.warm_clothes < 0 ? scene.characters : scene.warm_clothes;
     int house = world.add_house("Будинок_1", {60, 0}, {{"warm_clothes", warm_clothes}, {"clothes", 0}});
     world.add_forest("Ліс_1", {0, 300}, scene.trees);
     world.add_field("Поле_1", {120, -120});
     world.add_board("Дошка_1", {110, 20});  // ~55 m past the house; its label clears the other labels on screen
-    world.add_meadow("Луг_1", {-120, 120});  // hay for animals; animals themselves are bought (trade)
+    world.add_meadow("Луг_1", {-120, 120});
+    const Balance& b = world.balance();
+    world.add_deposit("Кар'єр_1", {-170, -60}, "stone", static_cast<int>(std::lround(b.quarry_stone)));
+    world.add_deposit("Рудня_1", {-250, 40}, "ore", static_cast<int>(std::lround(b.mine_ore)));  // hay for animals; animals themselves are bought (trade)
+    world.add_town_hall("Управа_1", {40, -90});  // the settlement's coins; the trading post is built by the player
     for (int i = 0; i < scene.characters; ++i) {
         std::string name = kNames[i % kNameCount];
         if (i >= kNameCount) name += "_" + std::to_string(i / kNameCount + 1);

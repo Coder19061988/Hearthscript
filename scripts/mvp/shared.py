@@ -75,14 +75,20 @@ def woodcutter():
     except (NoItemError, ReservedError) as e:
         notify(f"Без сокири: {e.reason}")
         return False
+    broken = False
     try:
         me.chop_wood(forest, until=time(18, 0))
     except TooHeavyError:
         pass
     except ToolBrokenError as e:
         notify(f"Зламалася сокира, нарубано {e.done}")
+        broken = True
     me.drop(storage)
-    me.put_back(storage)  # і зламану — на склад, щоб руки були вільні
+    if broken:
+        me.dismantle()  # інструменти не ремонтують: руки вже вільні — брухт і дерево на склад
+        me.drop(storage)
+    else:
+        me.put_back(storage)
     return True
 
 
@@ -112,14 +118,20 @@ def farmer():
         return True
     if field.is_ripe:
         me.take(Sickle, storage)
+        broken = False
         try:
             me.harvest(field, until=time(19, 0))
         except TooHeavyError:
             pass
         except ToolBrokenError as e:
             notify(f"Зламався серп, зібрано {e.done}")
+            broken = True
         me.drop(storage)
-        me.put_back(storage)
+        if broken:
+            me.dismantle()
+            me.drop(storage)
+        else:
+            me.put_back(storage)
         return True
     return False
 

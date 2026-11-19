@@ -1,9 +1,28 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
 namespace kindle {
+
+// Something a workshop makes ("recipes" in config/balance.json): per unit it takes `inputs` from the worker's
+// hands and gives one item — a resource into the hands, or a tool into the tool slot.
+struct Recipe {
+    std::string at;         // where: "house" or a workshop type ("smithy")
+    std::string workplace;  // one worker at a time per building: "mill", "oven", "forge"
+    std::map<std::string, int> inputs;
+    double minutes = 0;     // per unit
+    bool fire = false;      // the building's stove must burn
+    bool heavy = false;     // heavy work (tires like chopping)
+};
+
+// A kind of workshop ("workshops" in config/balance.json): its name and what its blueprint needs.
+struct WorkshopType {
+    std::string name;                       // shown to the player: "Кузня"
+    std::map<std::string, int> materials;  // brought to the construction site
+    double hours = 0;                       // of construction work
+};
 
 // Tunable numbers of the prototype. Defaults mirror "Баланс_прототипу.md";
 // config/balance.json may override any subset of them (same key names).
@@ -27,6 +46,13 @@ struct Balance {
     double tool_take_minutes = 1.0;          // take / put_back
     double tool_wear_per_hour = 2.5;         // % of condition per hour of work (chop / harvest); ~4 days of 10 h
     double tool_worn_warning = 25.0;         // the log warns once the condition drops below this, %
+    // Tools are not repaired: any tool can be dismantled into scrap (and wood from a handle)
+    double dismantle_minutes = 10.0;
+    double axe_scrap = 2.0;
+    double scythe_scrap = 2.0;
+    double sickle_scrap = 1.0;
+    double dismantle_wood = 1.0;             // an axe's or a scythe's handle
+    double scrap_kg = 1.0;
     double transfer_base_minutes = 1.0;      // pick_up / drop
     double transfer_per_unit_minutes = 0.2;
     double chop_minutes_per_unit = 20.0;
@@ -99,8 +125,6 @@ struct Balance {
     double field_grow_days = 4.0;         // growing happens only in the warm season
     double field_yield_grain = 80.0;
     double field_harvest_hours = 6.0;
-    double grind_minutes_per_unit = 3.0;
-    double bake_minutes_per_unit = 5.0;
     double grain_kg = 0.5;
     double flour_kg = 0.5;
 
@@ -145,6 +169,79 @@ struct Balance {
     double milk_hunger_relief = 15.0;
     double eggs_hunger_relief = 10.0;
 
+    // Trade: the merchant, the trading post, coins in the town hall; values of goods
+    double start_coins = 50.0;  // coins in the town hall at the start
+    double merchant_first_day = 5.0;  // the first visit (day number)
+    double merchant_interval_days = 5.0;
+    double merchant_arrive_hour = 8.0;
+    double merchant_leave_hour = 20.0;  // he trades when he leaves
+    double merchant_price_spread = 0.25;  // prices are value * (1 +- spread) per visit
+    double merchant_offer_share = 0.5;  // he pays this share of the price
+    double trading_post_build_wood = 20.0;
+    double trading_post_build_hours = 6.0;
+    double order_minutes = 2.0;  // me.order
+    double clothes_kg = 2.0;  // a set of clothes in hands
+    double value_wood = 4.0;  // base value of goods, coins per unit
+    double value_grain = 6.0;
+    double value_flour = 8.0;
+    double value_bread = 10.0;
+    double value_hay = 3.0;
+    double value_milk = 6.0;
+    double value_eggs = 3.0;
+    double value_meat = 12.0;
+    double value_clothes = 30.0;
+    double value_warm_clothes = 60.0;
+    double value_axe = 50.0;
+    double value_sickle = 40.0;
+    double value_scythe = 50.0;
+    double value_chicken = 25.0;
+    double value_cow = 200.0;
+    double value_scrap = 8.0;
+
+    // Flax and clothes: a crop, cloth, garments that wear while worn and turn into rags
+    double flax_seed = 10.0;  // flax to sow a field
+    double flax_yield = 40.0;  // flax from a ripe field
+    double flax_kg = 0.5;
+    double cloth_kg = 1.0;
+    double rags_kg = 0.5;
+    double clothes_wear_per_day = 5.0;  // % of condition per day worn (~20 days)
+    double warm_clothes_wear_per_day = 7.0;  // % per day worn (~14 days)
+    double clothes_worn_warning = 25.0;  // the log warns below this, %
+    double value_flax = 3.0;
+    double value_cloth = 10.0;
+    double value_rags = 1.0;
+
+    // Wood: planks from the sawmill, beds from the carpentry; a bed makes sleep restore faster
+    double planks_kg = 4.0;
+    double bed_kg = 20.0;
+    double fatigue_sleep_bed_per_hour = -16.0;  // sleeping in a bed (on the floor at home: -12)
+    double value_planks = 4.0;
+    double value_bed = 30.0;
+
+    // Stone and metal: the quarry and the mine (a pickaxe), charcoal from the kiln, iron in the smithy
+    double quarry_stone = 400.0;  // stone in the quarry at the start
+    double mine_ore = 150.0;  // ore in the mine at the start
+    double mine_stone_minutes = 15.0;  // a unit of stone with a pickaxe
+    double mine_ore_minutes = 30.0;  // a unit of ore with a pickaxe
+    double stone_kg = 10.0;
+    double ore_kg = 8.0;
+    double charcoal_kg = 2.0;
+    double iron_kg = 5.0;
+    double pickaxe_scrap = 2.0;  // dismantling a pickaxe
+    double value_stone = 2.0;
+    double value_ore = 4.0;
+    double value_charcoal = 3.0;
+    double value_iron = 12.0;
+    double value_pickaxe = 45.0;
+
+    // Water: the well, watering a field speeds its growth (rain waters the fields too)
+    double water_kg = 10.0;  // a bucket
+    double field_water_units = 5.0;  // buckets to water a field
+    double field_water_minutes = 30.0;  // watering a field
+    double field_water_days = 1.0;  // watering lasts
+    double field_water_growth_bonus = 0.5;  // a watered field grows this much faster
+    double field_rain_soak_hours = 6.0;  // rain waters the fields for this long after it
+
     // Notice board (limited knowledge: characters share what they saw)
     double board_build_wood = 5.0;
     double board_build_hours = 1.0;
@@ -155,6 +252,11 @@ struct Balance {
     // Loads a flat JSON object {"key": number, ...}; keys starting with "_" are comments.
     // Returns false and sets `error` when the file can't be read or parsed.
     // Unknown keys are reported in `warnings` and ignored.
+    // Workshops and what they make: only from the JSON ("workshops", "recipes"), there are no defaults in code.
+    // An item may have several recipes (variants): the first one whose inputs are in the hands is used.
+    std::map<std::string, WorkshopType> workshops;
+    std::map<std::string, std::vector<Recipe>> recipes;
+
     bool load_json_file(const std::string& path, std::string& error, std::vector<std::string>& warnings);
     bool load_json_text(const std::string& text, std::string& error, std::vector<std::string>& warnings);
 };

@@ -36,7 +36,32 @@ def check_balance() -> None:
     defaults = {m[0]: float(m[1]) for m in re.findall(r"double\s+(\w+)\s*=\s*([-+0-9.eE]+)\s*;", header)}
     fields = re.findall(r"^\s*KINDLE_FIELD\((\w+)\),", read("core/balance.cpp"), re.M)
     data = json.loads(read("config/balance.json"))
+    recipes = data.pop("recipes", {})  # workshop recipes: a section of their own, not a number of Balance
+    workshops = data.pop("workshops", {})  # workshop types: name, materials, hours
+    for wtype, w in workshops.items():
+        missing = {"name", "materials", "hours"} - set(w)
+        if missing:
+            errors.append(f"майстерні: у \"{wtype}\" бракує {', '.join(sorted(missing))}")
     keys = {k: v for k, v in data.items() if not k.startswith("_")}
+    recipes = {item: (v if isinstance(v, list) else [v]) for item, v in recipes.items()}  # variants
+    for item, variants in recipes.items():
+        for r in variants:
+            missing = {"at", "workplace", "inputs", "minutes"} - set(r)
+            if missing:
+                errors.append(f"рецепти: у \"{item}\" бракує {', '.join(sorted(missing))}")
+            if r.get("at") not in set(workshops) | {"house"}:
+                errors.append(f"рецепти: \"{item}\" робиться в \"{r.get('at')}\", а такої майстерні немає в \"workshops\"")
+    if recipes:
+        prelude_text = read("core/prelude.py")
+        res = set(re.findall(r'"(\w+)"', block(prelude_text, "_RESOURCES = (", ")")))
+        tools = set(re.findall(r'_kind = "(\w+)"', block(prelude_text, "class Tool:", "_TOOLS = {")))
+        for item, variants in recipes.items():
+            if item not in res and item not in tools:
+                errors.append(f"рецепти: \"{item}\" — ні ресурс (_RESOURCES), ні інструмент у прелюдії")
+            for r in variants:
+                for need in r.get("inputs", {}):
+                    if need not in res:
+                        errors.append(f"рецепти: \"{item}\" потребує \"{need}\", якого немає в _RESOURCES прелюдії")
 
     for name in defaults.keys() - set(fields):
         errors.append(f"баланс: поле {name} є в core/balance.h, але не в kFields (core/balance.cpp) — JSON його не змінить")
@@ -114,7 +139,8 @@ def check_api_names() -> None:
         errors.append(f"винятки: ядро кидає {t}, але в core/prelude.py немає такого класу")
     for t in exc - all_names:
         errors.append(f"винятки: {t} не експортовано в __all__ прелюдії — гравець не зможе його перехопити")
-    defined = set(re.findall(r"^(?:class|def) ([A-Za-z]\w*)", prelude_text, re.M)) | {"me", "world"}
+    defined = set(re.findall(r"^(?:class|def) ([A-Za-z]\w*)", prelude_text, re.M))
+    defined |= set(re.findall(r"^([A-Za-z]\w*) = ", prelude_text, re.M))  # module-level objects: me, world, merchant
     for n in all_names - defined:
         errors.append(f"прелюдія: {n} є в __all__, але не визначено")
 

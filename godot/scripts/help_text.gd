@@ -41,7 +41,7 @@ const TEXT := """[font_size=20][b]Kindlescript — довідка[/b][/font_size
 
 [b]Персонаж: me[/b]
 [code]me.name, me.hunger, me.fatigue, me.warmth, me.health[/code] — 0…100 (тепло нижче 30 — шкодить здоров'ю)
-[code]me.tool[/code] (Axe / Sickle / None), [code]me.clothes[/code] (Clothes / WarmClothes), [code]me.carrying[/code], [code]me.home[/code]
+[code]me.tool[/code] (Axe / Sickle / None), [code]me.clothes[/code] (Clothes / WarmClothes / None), [code]me.clothes_condition[/code] (%), [code]me.carrying[/code], [code]me.home[/code]
 
 [b]Дії[/b] (тривалі можна обмежити: amount=, until=time(18, 0), hours=2)
 [code]me.go_to(об'єкт)[/code], [code]me.go_home()[/code], [code]me.travel_time(об'єкт)[/code]
@@ -51,19 +51,22 @@ const TEXT := """[font_size=20][b]Kindlescript — довідка[/b][/font_size
 [code]me.eat("bread")[/code]
 [code]me.sleep(until=time(6, 0))[/code] — спати вдома;  [code]me.rest(hours=1)[/code];  [code]me.wait_until(time(6, 0))[/code]
 
-[b]Інструменти зношуються[/b] (~40 год рубки чи жнив; ремонту поки немає — бережіть їх)
+[b]Інструменти зношуються[/b] (~40 год рубки, жнив чи косіння; їх не ремонтують — бережіть)
 [code]me.tool.condition[/code] — стан, %;  [code]me.tool.is_broken[/code];  [code]me.tool.quality[/code] (поки 1);  [code]isinstance(me.tool, Axe)[/code]
 [code]tools(Axe, free=True)[/code] — цілі вільні сокири, про які персонаж знає (бачив на складі)
-Поломка посеред роботи — [code]ToolBrokenError[/code] ([code]e.done[/code] — скільки встигли); зламаний поверніть: [code]me.put_back(склад)[/code]
+Поломка посеред роботи — [code]ToolBrokenError[/code] ([code]e.done[/code] — скільки встигли). Ремонту немає:
+[code]me.dismantle()[/code] — розібрати інструмент у руках на брухт і дерево (брухт купує купець)
 
 [b]Тепло й зима[/b]
-[code]me.wear(WarmClothes)[/code] / [code]me.wear(Clothes)[/code] — переодягтися вдома (одяг лежить у скрині)
+[code]me.wear(WarmClothes)[/code] / [code]me.wear(Clothes)[/code] — переодягтися вдома: зі скрині береться комплект у найкращому стані
+Одяг зношується, поки його носять (звичайний ~20 днів, теплий ~14); зношений стає ганчір'ям ("rags") у руках
 [code]me.heat(будинок, amount=None)[/code] — покласти в піч дрова, які несеш (1 дрова горить 2 год)
 [code]будинок.firewood, будинок.temperature, будинок.is_heated, будинок.has(WarmClothes)[/code]
 
 [b]Хліб: поле → зерно → жорна → борошно → піч → хліб[/b]
 [code]me.sow(поле)[/code] — сіяти (10 зерна в руках; лише в теплу пору); поле росте 4 дні
-[code]me.harvest(поле)[/code] — жати серпом; зерно в руки
+[code]me.sow(поле, crop="flax")[/code] — посіяти льон (10 льону в руках; урожай — 40 льону);  [code]поле.crop[/code] ("grain" / "flax" / None)
+[code]me.harvest(поле)[/code] — жати серпом; урожай (зерно чи льон) — у руки
 [code]me.grind(будинок)[/code] — змолоти зерно, яке несеш, на борошно (жорна в будинку)
 [code]me.bake(будинок)[/code] — спекти хліб із борошна (піч має горіти)
 [code]поле.state[/code] ("empty" / "sown" / "ripe" / "unknown"), [code]поле.is_ripe, поле.growth, поле.grain_left[/code]
@@ -74,6 +77,34 @@ const TEXT := """[font_size=20][b]Kindlescript — довідка[/b][/font_size
 [code]me.milk(корова)[/code], [code]me.collect_eggs(курка)[/code];  [code]me.slaughter(тварина)[/code] — м'ясо в руки
 Сіно: [code]me.take(Scythe, склад)[/code], [code]me.mow(get("Луг_1"))[/code] — лише в теплу пору; корові на зиму ~30 сіна
 Їжа: [code]me.eat("bread")[/code], а також "meat", "milk", "eggs"
+
+[b]Торгівля[/b] (купець приїжджає на торговий пост раз на 5 днів, 08:00–20:00, і торгує, коли від'їжджає)
+Торговий пост ставлять кресленням; монети лежать в управі: [code]get("Управа_1").coins[/code].
+Кнопка «Управа» вгорі: зведення (ціни купця, замовлення, склади) і діаграми запасів, людей, монет і тварин по днях.
+[code]me.drop(post)[/code] — покласти товар на продаж;  [code]me.order(post, "grain", 10)[/code], [code]me.order(post, Cow)[/code] — замовити
+Куплене купець лишає на посту: [code]me.pick_up(post, "grain", 10)[/code], [code]me.take(Axe, post)[/code]; тварин — одразу в хлів
+[code]merchant.is_here, merchant.days_until, merchant.price(Cow), merchant.offer("wood")[/code];  [code]@on(Event.MERCHANT_ARRIVED)[/code]
+Одяг теж можна нести: [code]me.pick_up(post, "warm_clothes", 1)[/code], [code]me.drop(будинок)[/code] — у скриню
+
+[b]Майстерні[/b] (виготовлення за рецептами; матеріали — з рук)
+[code]me.craft(Axe, кузня)[/code] — брухт 2 + дрова 2 → сокира (2 год); коса й кайло — так само; серп — брухт 1 + дрова 1 (1,5 год)
+Кузню ставлять кресленням (40 дров, 12 год); одне робоче місце — горн. Новий інструмент — у руки (вони мають бути вільні).
+[code]me.grind(будинок)[/code] і [code]me.bake(будинок)[/code] — це [code]me.craft("flour", будинок)[/code] і [code]me.craft("bread", будинок)[/code]
+Кравецька (30 дров, 8 год): [code]me.craft("cloth", кравецька)[/code] — льон 2 → тканина (1 год, ткацький верстат);
+[code]me.craft(Clothes, кравецька)[/code] — тканина 3 → одяг (2 год), [code]WarmClothes[/code] — тканина 5 (3 год); одяг — у скриню: [code]me.drop(будинок)[/code]
+Лісопилка (30 дров, 10 год): [code]me.craft("planks", лісопилка)[/code] — дрова 1 → дошки (20 хв)
+Столярня (10 дров + 20 дощок, 8 год): [code]me.craft("bed", столярня)[/code] — дошки 4 + сіно 3 → ліжко (3 год)
+Ліжко ставлять у будинок: [code]me.drop(будинок)[/code];  [code]будинок.beds[/code]. У ліжку сон знімає втому швидше (16/год проти 12)
+
+[b]Камінь і метал[/b]
+[code]me.take(Pickaxe, склад)[/code], [code]me.mine(get("Кар'єр_1"))[/code] — камінь (15 хв/од.), [code]me.mine(get("Рудня_1"))[/code] — руда (30 хв/од.)
+[code]родовище.resource[/code] ("stone" / "ore"), [code]родовище.left[/code] — скільки лишилося (бачене)
+Вуглярня (20 каменю + 10 дров, 8 год): [code]me.craft("charcoal", вуглярня)[/code] — дрова 3 → вугілля (2 год)
+Кузня: [code]me.craft("iron", кузня)[/code] — руда 2 + вугілля 1 → залізо (1 год); інструменти — із брухту або із заліза (залізо 2 + дрова 2)
+
+[b]Вода[/b] (колодязь: 15 каменю + 5 дров, 6 год)
+[code]me.draw_water(колодязь)[/code] — набрати води (відро 10 кг, 5 хв; без обмежень — до повних рук)
+[code]me.water(поле)[/code] — полити: 5 відер, 30 хв; полите поле добу росте на 50% швидше (дощ теж поливає);  [code]поле.is_watered[/code]
 
 [b]Будівництво й заселення[/b]
 «Будувати» вгорі → тип → клік на карті → назва. Далі — кодом:

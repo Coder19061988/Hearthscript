@@ -100,6 +100,7 @@ func _finish() -> void:
 		failures.append("креслення не намальоване у 3D")
 	if sim.get_globals().get("WINTER_MODE") != true or _main.ui._globals_shown.get("WINTER_MODE") != true:
 		failures.append("глобальна змінна з панелі не дійшла до симуляції або до вкладки")
+	failures.append_array(_check_first_person())
 	# Save and load through the same functions as the "Гра" menu.
 	var path := "user://saves/smoke_test.json"
 	DirAccess.make_dir_recursive_absolute("user://saves")
@@ -126,11 +127,81 @@ func _finish() -> void:
 	failures.append_array(_check_outcome({"characters": 2, "hunger": 100, "health": 2, "random_rain": false}, false))
 	failures.append_array(_check_outcome({"characters": 2, "start_day": 15, "start_hour": 23.5, "random_rain": false}, true))
 	failures.append_array(_check_animals())
+	failures.append_array(_check_trade())
 	print("Godot smoke: %s, дров на складі %d, записів у журналі %d" % [smoke_time, wood, _main.ui._log_lines])
 	for f in failures:
 		printerr("FAIL: " + f)
 	print("OK" if failures.is_empty() else "ПРОВАЛ")
 	quit(0 if failures.is_empty() else 1)
+
+
+## First person the way a player uses it: V — the view at eye height, the side panel hidden; the mouse looks
+## around; walking into the storage stops at its wall; a click selects the character under the crosshair;
+## Esc — back to the overview; the button in the corner of the view enters first person too.
+func _check_first_person() -> Array:
+	var problems := []
+	var rig = _main.camera_rig
+	var ui = _main.ui
+	_main._unhandled_input(_key(KEY_V))
+	if not rig.first_person or ui._side.visible or ui._log_panel.visible or not ui._crosshair.visible:
+		problems.append("V не перемкнуло на вигляд від першої особи")
+		return problems
+	if absf(rig.camera.global_position.y - rig.EYE_HEIGHT) > 0.01:
+		problems.append("від першої особи камера не на висоті очей: %.2f" % rig.camera.global_position.y)
+	var label: Label3D = _main.world_view._buildings.values()[0]["label"]
+	if not label.fixed_size:
+		problems.append("від першої особи написи будівель не сталого розміру на екрані")
+	var look := InputEventMouseMotion.new()
+	look.relative = Vector2(100.0, 0.0)
+	var yaw: float = rig._yaw
+	rig._unhandled_input(look)  # right after V: the cursor jumping to the window center
+	if not is_equal_approx(rig._yaw, yaw):
+		problems.append("від першої особи погляд смикнувся, коли курсор перескочив у центр вікна")
+	rig._captured_frame -= rig.CAPTURE_SETTLE_FRAMES  # as if a few frames have passed
+	rig._unhandled_input(look)
+	if is_equal_approx(rig._yaw, yaw):
+		problems.append("від першої особи миша не повертає погляд")
+	# Склад_1 (0, 0 m) stands at x -3…3, z -6.5…-1.5 in the scene: walk north at it from the south.
+	rig.position = Vector3(0.0, rig.EYE_HEIGHT, 5.0)
+	rig._yaw = 0.0
+	rig._apply()
+	rig.walk(Vector2(0.0, 1.0), 3.0, false)
+	var stop: float = -1.5 + rig.BODY_RADIUS
+	if absf(rig.position.z - stop) > 0.05:
+		problems.append("від першої особи хода не спинилася біля стіни складу: z = %.2f, очікувано %.2f" % [
+			rig.position.z, stop])
+	# The crosshair is the screen center: look at a character from 6 units and click.
+	var target: Dictionary = _main.sim.get_characters()[1]
+	var body: Vector3 = _main.world_view._people[target["id"]]["root"].position
+	rig.position = Vector3(body.x, rig.EYE_HEIGHT, body.z + 6.0)
+	rig._pitch = -rad_to_deg(atan2(rig.EYE_HEIGHT - 1.0, 6.0))
+	rig._apply()
+	_main.select_character(_main.sim.get_characters()[0]["id"])
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	_main._unhandled_input(click)
+	if _main.selected_id != target["id"]:
+		problems.append("від першої особи клік не вибрав персонажа під прицілом")
+	_main._unhandled_input(_key(KEY_ESCAPE))
+	if rig.first_person or not ui._side.visible or not ui._log_panel.visible or ui._crosshair.visible:
+		problems.append("Esc не повернув огляд згори з бічною панеллю та журналом")
+	elif absf(rig.position.y) > 0.01 or not is_equal_approx(rig.camera.fov, rig.OVERVIEW_FOV) or label.fixed_size:
+		problems.append("після виходу з першої особи камера чи написи не стали оглядовими")
+	ui._first_person_button.pressed.emit()
+	if not rig.first_person:
+		problems.append("кнопка «Від першої особи» не перемкнула вигляд")
+	_main._unhandled_input(_key(KEY_V))
+	if rig.first_person:
+		problems.append("друге натискання V не повернуло огляд згори")
+	return problems
+
+
+func _key(code: Key) -> InputEventKey:
+	var event := InputEventKey.new()
+	event.keycode = code
+	event.pressed = true
+	return event
 
 
 ## Animals live in a barn and are drawn there; a bought animal needs a barn with a free place.
@@ -149,8 +220,47 @@ func _check_animals() -> Array:
 		meadow = meadow or (b["kind"] == "meadow" and b["hay"] > 0)
 	if not meadow:
 		problems.append("на карті немає лугу з травою")
-	if _main.ui._build_menu.get_popup().get_item_count() != 5:
-		problems.append("у меню «Будувати» немає хліва")
+	var kinds: Array[String] = _main.ui._build_kinds
+	if _main.ui._build_menu.get_popup().get_item_count() != sim.get_build_costs().size() or not kinds.has("smithy") \
+			or not kinds.has("tailor"):
+		problems.append("меню «Будувати» не збігається з тим, що можна будувати (зокрема кузні й кравецької)")
+	var person: Dictionary = sim.get_characters()[0]
+	if person["clothes"] != "clothes" or person["clothes_condition"] < 99.0:
+		problems.append("у панелі персонажа немає стану одягу: %s %s" % [person["clothes"], person["clothes_condition"]])
+	for b in sim.get_buildings():
+		if b["kind"] == "field" and not b.has("crop"):
+			problems.append("поле не каже, що на ньому росте (crop)")
+	return problems
+
+
+## The town hall window: coins, the merchant's prices, a hint that a trading post is needed.
+func _check_trade() -> Array:
+	var problems := []
+	var sim = _main.sim
+	sim.start(_main.START_OPTIONS)
+	_main._show_world()
+	_main._process(0.0)
+	var ui = _main.ui
+	ui._town_hall_button.pressed.emit()
+	var text: String = ui._town_hall._text.get_parsed_text()
+	if not ui._town_hall.visible or not text.contains("Управа_1 — монет: 50") or not text.contains("Торгового поста немає"):
+		problems.append("вікно управи не показує монети чи підказку про торговий пост: " + text.left(200))
+	_main._process(0.0)
+	if not ui._storage_label.text.begins_with("купець через"):
+		problems.append("верхня панель не показує, коли приїде купець: " + ui._storage_label.text)
+	var merchant: Dictionary = sim.get_merchant()
+	if merchant.get("days_until", -1) != 4 or (merchant["prices"] as Dictionary).get("cow", 0) <= 0:
+		problems.append("купець не запланований на 5-й день або без цін: %s" % [merchant])
+	# Charts: a sample every game hour reaches the open window.
+	sim.advance(3 * 3600.0)
+	_main._process(0.0)
+	var stock_chart = ui._town_hall._stock_chart
+	if sim.get_stats_size() != 4 or stock_chart._days.size() != 4 or stock_chart.series_count() == 0:
+		problems.append("діаграми управи не отримали знімків: %d / %d, ліній %d" % [sim.get_stats_size(),
+			stock_chart._days.size(), stock_chart.series_count()])
+	if ui._town_hall._people_chart.series_count() != 4:
+		problems.append("на діаграмі «Люди» немає здоров'я, голоду, тепла й втоми")
+	ui._town_hall.hide()
 	return problems
 
 

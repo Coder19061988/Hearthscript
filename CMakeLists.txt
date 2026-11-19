@@ -107,7 +107,10 @@ set(KINDLE_TESTS
   knowledge
   board
   tool_wear
-  animals)
+  animals
+  trade
+  stats
+  craft clothes wood mining water)
 foreach(t IN LISTS KINDLE_TESTS)
   add_test(NAME ${t} COMMAND kindle_proto test ${t})
 endforeach()

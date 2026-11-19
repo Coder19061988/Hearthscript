@@ -17,10 +17,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - збереження й завантаження гри (JSON);
   - спільний код + код персонажа (пріоритет) + `main()`, правила `@on(time(...))` / `@on(lambda: ...)` і `off(...)` (API_MVP.md, розділ 12);
   - кінець гри: «Першу зиму пережито» / «Усі персонажі загинули» — запис `LogKind::Outcome` і вікно підсумку (API_MVP.md, розділ 6).
-- Після MVP: обмежене знання й дошка оголошень (`me.post` / `me.read`, `known_at`, API_MVP.md, розділ 13); знос інструментів (`tools(...)`, `ToolBrokenError`, розділ 14); корова й кури в хліві, сіно з луки, молоко, яйця, м'ясо (розділ 15).
+- Після MVP: обмежене знання й дошка оголошень (`me.post` / `me.read`, `known_at`, API_MVP.md, розділ 13); знос інструментів (`tools(...)`, `ToolBrokenError`, розділ 14); корова й кури в хліві, сіно з луки, молоко, яйця, м'ясо (розділ 15); торгівля: купець, торговий пост, замовлення, управа з монетами (розділ 16); діаграми в управі (розділ 17).
 
   Критерій MVP («хороший код переживає першу зиму») перевіряє тест `mvp_winter_survival`.
-- Ще немає: ремонту й виготовлення інструментів, зносу одягу (MVP §8).
+- Майстерні й рецепти (`me.craft`, розділ 18): жорна й піч у будинку, кузня — інструменти з брухту (ремонту немає: зношені розбирають на брухт).
+- Ланцюжок одягу (розділ 19): льон на полі (`me.sow(field, crop="flax")`), кравецька (льон → тканина → одяг), знос одягу й ганчір'я.
+- Ланцюжок дерева (розділ 20): лісопилка (дрова → дошки), столярня (дошки + сіно → ліжко), ліжка в будинку прискорюють сон (`World::has_bed`, `Activity::SleepBed`).
+- Камінь і метал (розділ 21): родовища `Кар'єр_1` / `Рудня_1` (`ObjKind::Deposit`, `deposit`, `deposit_left`), кайло й `me.mine` (`step_gather`), вуглярня (дрова → вугілля), залізо в кузні; інструменти мають варіант рецепта із заліза.
+- Вода (розділ 22): колодязь (вода — рецепт без матеріалів, `me.draw_water`), `me.water(field)` — полив (`Object::watered_until`); дощ теж поливає посіяні поля.
+- Ще немає: решти майстерень і ланцюжків з «Плану гри» (MVP §8).
 
 **Без сумісності зі старим.** Гра нова й ще не випущена. Не підтримуй збереження з попередніх версій коду, старі назви API чи старий формат даних. Змінюй формат і API прямо й онови тести та документи. Запасні гілки «для старих файлів» і обгортки для старого API не потрібні: код має лишатися чистим.
 
@@ -47,7 +52,7 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
 - **Скріншоти.** Інструмент `screenshot.gd` рендерить сцену у вікні й зберігає PNG; так можна перевірити візуальні зміни без редактора.
 - **Новий сценарний тест:** додай функцію та рядок у `kTests` у [proto/tests.cpp](proto/tests.cpp), а назву — у `KINDLE_TESTS` у [CMakeLists.txt](CMakeLists.txt).
 - **Прелюдія:** [core/prelude.py](core/prelude.py) вшивається в бінарник, тож після змін у ній потрібна перезбірка.
-- **Баланс:** [config/balance.json](config/balance.json) читається під час запуску. Новий параметр додавай у трьох місцях: поле в `Balance` ([core/balance.h](core/balance.h)), запис у `kFields` ([core/balance.cpp](core/balance.cpp)) і ключ у JSON.
+- **Баланс:** [config/balance.json](config/balance.json) читається під час запуску. Новий параметр додавай у трьох місцях: поле в `Balance` ([core/balance.h](core/balance.h)), запис у `kFields` ([core/balance.cpp](core/balance.cpp)) і ключ у JSON. Рецепти майстерень — розділ `"recipes"` того самого файлу (`Balance::recipes`, без значень у коді): нове виробництво — це рецепт і, за потреби, будівля.
 - **Дані для Godot:** `config/balance.json`, `scripts/woodcutter.py` і `scripts/start_shared.py` (стає `godot/data/shared.py`) копіюються в `godot/data/` під час збірки (ціль `kindle_godot_data`). Редагуй оригінали, а не копії.
 - **Код нової гри:** мінімальний спільний код [scripts/start_shared.py](scripts/start_shared.py) (лише їжа й сон), коду персонажів немає.
 - **Еталонне поселення:** [scripts/mvp/shared.py](scripts/mvp/shared.py) + рядок ролі в коді кожного персонажа (`set_settlement_code` у [proto/tests_mvp.inc](proto/tests_mvp.inc)). Якщо змінюєш баланс або механіку, переконайся, що `mvp_winter_survival` проходить, а `mvp_bad_code` — ні.
@@ -73,7 +78,7 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
 - **[core/world.h](core/world.h)** — світ: об'єкти, потреби, погода, журнал подій.
   - Дії — відновлювані машини станів: `begin_action` / `step_action(id, budget)` / `end_action`. Дія з ціллю сама веде персонажа до цілі, тож після переривання продовжується з того самого місця.
   - Кожен персонаж має власний `local_time`.
-  - Збір (рубка, жнива) і перетворення (жорна, піч) — спільні кроки `step_gather` і `step_convert`.
+  - Збір (рубка, жнива, косіння) — `step_gather`; виготовлення за рецептом у майстерні (жорна, піч, горн) — `step_craft`: робоче місце — `Object::workplace_users`, звільняється в `end_action`.
   - Будинки (піч, температура) й поля (ріст) оновлюються раз на тік в `update_environment`.
   - Тепло персонажа рахується в `pass_time` за температурою довкола: будинок біля дверей або надворі.
   - Креслення — це той самий `Object` з `built == false`. Матеріали лежать у `materials_delivered`, прогрес — у `build_done`; недобудоване відхиляється в `begin_action` (`fail_unbuilt`). Нові креслення з'являються посеред гри через `add_blueprint`.
@@ -88,8 +93,11 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
   - Якщо код змінено, персонаж помер або обробник упав, співпрограма покидається (`abandon`), а VM скидається під час наступного `set_code`.
 - **[core/prelude.py](core/prelude.py)** — Python-API з `API_прототипу.md`; публічні імена копіюються в builtins.
 - **[core/simulation.h](core/simulation.h)** — `Simulation::tick(dt)` і стартова сцена.
+- **Статистика:** `World::end_tick` робить знімок `StatSample` (запаси на складах, монети, люди й їхні середні потреби, тварини) на старті й на початку кожної ігрової години; `World::stats()`, зберігається в `save.cpp`. Це вигляд гравця для діаграм, а не знання персонажів.
+- **Торгівля:** `World::merchant_` (`Merchant`: розклад візиту, ціни `prices` / `offers` з окремого `trade_rng_`, щоб торгівля не змінювала погоду). `begin_tick` викликає `merchant_arrives` / `merchant_trades` і дає події `MERCHANT_ARRIVED` / `MERCHANT_LEFT`. Пост — `ObjKind::TradingPost`: `resources` / `tools` — куплене, `for_sale` / `sale_tools` — на продаж, `orders`. Монети — `coins` в `ObjKind::TownHall`.
 - **Тварини:** об'єкти `ObjKind::Animal` (`species` — "cow" / "chicken", `home` — хлів, `hunger`, `health`, `produce`, `removed` після забою). Живуть лише в хліві й стоять у ньому; з'являються через `World::add_animal` (для торгівлі й тестів). Голод і продукція — `World::update_animal` в `update_environment`; дії `feed` / `milk` / `collect_eggs` / `slaughter` — `step_animal`, косіння — `step_gather`. У Python тип тварини — це її вид (`make_info` дає "cow" / "chicken").
-- **Інструменти:** окремі предмети `ToolItem` (`id`, `kind`, `quality`, `condition`, `reserved_by`): у `Object::tools` складу або в `Character::tool`. Знос — `World::wear_tool` у `step_gather`; поломка — `ToolBrokenError`. Резерв `take` прив'язаний до конкретного `tool_id` і знімається в `end_action`.
+- **Одяг:** комплекти `Garment` (`kind`, `condition`): `Character::clothes` і `Object::chest` (вектор комплектів у скрині будинку). Знос — `World::wear_clothes` у `pass_time`; на 0 комплект стає ганчір'ям (`"rags"`) у руках. `wear` бере зі скрині найкращий комплект; одяг, покладений у будинок (`drop`), стає новим комплектом. Поле має культуру `Object::crop` ("grain" / "flax"), насіння й урожай — `crop_seed` / `crop_yield`.
+- **Інструменти:** окремі предмети `ToolItem` (`id`, `kind`, `quality`, `condition`, `reserved_by`): у `Object::tools` складу або в `Character::tool`. Знос — `World::wear_tool` у `step_gather`; поломка — `ToolBrokenError`; ремонту немає — `me.dismantle()` розбирає інструмент у руках на брухт (`"scrap"`) і дерево. Резерв `take` прив'язаний до конкретного `tool_id` і знімається в `end_action`.
 - **Обмежене знання:** `Character::known` — копії об'єктів (`Knowledge`: `time`, `state`, `person`) такими, якими персонаж їх бачив.
   - `World::observe` оновлює все, що біля персонажа, на початку (`begin_action`) і наприкінці (`step_action`) кожної дії; `World::knowledge` ще й оновлює об'єкт, біля якого персонаж стоїть, у момент читання.
   - Нативні функції стану в `runtime.cpp` читають через `known_state` / `person_view`, а не з реального `Object`. Публічні (без знання): назва, положення, `built`, `capacity`, `residents`, `home`.
@@ -101,14 +109,15 @@ D:\Godot4\Godot_v4.6.2-stable_win64_console.exe --path godot --script res://test
 ### Інші частини
 
 - **[proto/](proto/)** — консольна програма `kindle_proto` (`run`, `test`, `list`, `bench`).
-- **[gdextension/](gdextension/)** — клас `KindleSimulation` (RefCounted) для GDScript. Методи: `start`, `advance(game_seconds)`, `get_buildings`, `get_characters`, `set_code`, `get_code`, `set_shared_code` / `get_shared_code`, `take_log`, `add_blueprint`, `get_build_costs`, `set_global` / `remove_global` / `get_globals`, `save_game` / `load_game`, `get_outcome`, `get_knowledge` (що знає персонаж — для панелі), `get_animals`, `add_animal` (купівля — у хлів з вільним місцем) та гетери часу, погоди й пори року. Повертає Dictionary/Array; позиції — `Vector2` у метрах. Для тестів `start` приймає ще `start_day`, `start_hour`, `hunger`, `health`, а також `barn` (готовий `Хлів_1`) з `cows` і `chickens`.
+- **[gdextension/](gdextension/)** — клас `KindleSimulation` (RefCounted) для GDScript. Методи: `start`, `advance(game_seconds)`, `get_buildings`, `get_characters`, `set_code`, `get_code`, `set_shared_code` / `get_shared_code`, `take_log`, `add_blueprint`, `get_build_costs`, `set_global` / `remove_global` / `get_globals`, `save_game` / `load_game`, `get_outcome`, `get_knowledge` (що знає персонаж — для панелі), `get_animals`, `add_animal` (тварина — у хлів з вільним місцем), `get_merchant`, `get_stats_size` / `get_stats` (історія для діаграм) та гетери часу, погоди й пори року. Повертає Dictionary/Array; позиції — `Vector2` у метрах. Для тестів `start` приймає ще `start_day`, `start_hour`, `hunger`, `health`, а також `barn` (готовий `Хлів_1`) з `cows` і `chickens`.
 - **[godot/](godot/)** — проєкт Godot. Сцену й інтерфейс будує код, у `main.tscn` лише корінь зі скриптом:
   - `main.gd` — щокадру `advance(delta × time_scale × speed)` (не більше 0,25 с реального часу за кадр), потім оновлює вигляд;
   - `world_view.gd` — 3D: 1 м = 0,2 одиниці; кожна будівля має свій корінь, який перебудовується, коли креслення стає будівлею; підписи персонажів — 2D-мітки над головою;
-  - `camera_rig.gd` — камера;
+  - `camera_rig.gd` — камера з двома режимами: огляд згори і «від першої особи» (V або кнопка в кутку 3D-області). Від першої особи гравець — невидимий спостерігач: миша захоплена, WASD — хода на висоті очей. Стіни, купа дров і дерева мають зіткнення (`WorldView.keep_walkable`, прямокутники й кола в `solids` кожної будівлі). Бічна панель і журнал ховаються (`GameUI.set_first_person`), а клік вибирає персонажа під прицілом;
   - `game_ui.gd` — верхня панель із меню «Будувати» і «Гра» (зберегти / завантажити / почати знову), журнал, бічна панель із вкладками «Код персонажа», «Спільний код» (обидві — `code_pane.gd`: CodeEdit, маркер рядка, «Застосувати») і «Глобальні змінні»; режим розміщення креслення, збереження у файл і збереження коду під час «Почати знову» живуть у `main.gd`;
+  - `town_hall_dialog.gd` — вікно «Управа»: вкладка «Зведення» (монети, ціни купця, пости, склади) і діаграми `stat_chart.gd` («Запаси», «Люди», «Монети й тварини»); `game_ui.update_trade` оновлює зведення щокадру, а `main.gd` передає `get_stats()` лише тоді, коли вікно відкрите й з'явився новий знімок;
   - `outcome_dialog.gd` — вікно підсумку гри; `main.gd` (`check_outcome`) показує його раз на результат за `get_outcome()` і ставить гру на паузу;
-  - `tests/` — `smoke_test.gd` (зокрема креслення кліком по карті, глобальна змінна з панелі, збереження й завантаження, обидва вікна підсумку) і `screenshot.gd` (`construction=1` — сцена будівництва, `save_dialog=1` — вікно збереження, `outcome=won|lost` — вікно підсумку, `animals=1` — хлів із тваринами).
+  - `tests/` — `smoke_test.gd` (зокрема креслення кліком по карті, глобальна змінна з панелі, режим від першої особи, збереження й завантаження, обидва вікна підсумку) і `screenshot.gd` (`construction=1` — сцена будівництва, `save_dialog=1` — вікно збереження, `outcome=won|lost` — вікно підсумку, `animals=1` — хлів із тваринами, `town_hall=N` — вікно управи на вкладці N, `first_person=1` — вигляд від першої особи).
   
   `godot/bin`, `godot/data` і `godot/.godot` генеруються й ігноруються git.
 - **[third_party/](third_party/)** — бібліотеки:

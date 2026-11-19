@@ -12,8 +12,8 @@ const BUILTINS := [
 ]
 const API := [
 	"me", "world", "get", "buildings", "animals", "tools", "time", "hours", "minutes", "notify", "on", "off", "Event",
-	"Season", "Axe", "Sickle", "Scythe", "Tool", "Clothes", "WarmClothes", "Storage", "House", "Forest", "Field", "Board",
-	"Barn", "Meadow", "Animal", "Cow", "Chicken",
+	"Season", "Axe", "Sickle", "Scythe", "Pickaxe", "Deposit", "Tool", "Clothes", "WarmClothes", "Storage", "House", "Forest", "Field", "Board",
+	"Barn", "Meadow", "Animal", "Cow", "Chicken", "TownHall", "TradingPost", "merchant", "Workshop", "Smithy", "Tailor", "Sawmill", "Carpentry", "Kiln", "Well",
 	"Building", "GameObject", "Person", "Me", "Duration", "TimeOfDay", "Moment", "EventInfo",
 	"ActionError", "NoItemError", "ReservedError", "TooHeavyError", "NoHomeError", "NotFoundError",
 	"WorkplaceBusyError", "ToolBrokenError",

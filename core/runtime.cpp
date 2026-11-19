@@ -166,7 +166,12 @@ struct RuntimeNatives {
     static Character& me() { return world().character(agent()->char_obj); }
 
     // (kind, id, name); an animal's kind is its species ("cow" / "chicken"), as the prelude's classes.
-    static const char* info_kind(const Object& o) { return o.kind == ObjKind::Animal ? o.species.c_str() : kind_name(o.kind); }
+    // An animal's kind is its species, a workshop's — its type ("smithy"), as the prelude's classes.
+    static const char* info_kind(const Object& o) {
+        if (o.kind == ObjKind::Animal) return o.species.c_str();
+        if (o.kind == ObjKind::Workshop) return o.workshop.c_str();
+        return kind_name(o.kind);
+    }
     static void make_info(py_OutRef out, const Object& o) {
         py_TValue* t = py_newtuple(out, 3);
         py_newstr(&t[0], info_kind(o));
@@ -209,10 +214,12 @@ struct RuntimeNatives {
         PY_CHECK_ARG_TYPE(0, tp_str);
         std::string kind = py_tostr(py_arg(0));
         py_newlist(py_r0());
-        const bool any_animal = kind == "animal";
+        const bool any_animal = kind == "animal", any_workshop = kind == "workshop";
         for (const Object& o : world().objects()) {
             if (o.removed) continue;  // slaughtered animals are gone
-            if (kind == info_kind(o) || (any_animal && o.kind == ObjKind::Animal)) make_info(py_list_emplace(py_r0()), o);
+            if (kind == info_kind(o) || (any_animal && o.kind == ObjKind::Animal) ||
+                (any_workshop && o.kind == ObjKind::Workshop))
+                make_info(py_list_emplace(py_r0()), o);
         }
         py_assign(py_retval(), py_r0());
         return true;
@@ -330,7 +337,18 @@ struct RuntimeNatives {
         if (c.clothes.empty())
             py_newnone(py_retval());
         else
-            py_newstr(py_retval(), c.clothes.c_str());
+            py_newstr(py_retval(), c.clothes.kind.c_str());
+        return true;
+    }
+    static bool char_clothes_condition(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(1);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Person, false, &o)) return false;
+        const PersonView c = person_view(o);
+        if (c.clothes.empty())
+            py_newnone(py_retval());
+        else
+            py_newfloat(py_retval(), c.clothes.condition);
         return true;
     }
     static bool char_carrying(int argc, py_StackRef argv) {
@@ -360,10 +378,17 @@ struct RuntimeNatives {
     }
 
     // ---- buildings
+    // A storage, or a trading post (what the merchant left there).
+    static bool storage_arg(py_Ref v, Object** out) {
+        if (!obj_arg(v, ObjKind::Storage, true, out)) return false;
+        if ((*out)->kind != ObjKind::Storage && (*out)->kind != ObjKind::TradingPost)
+            return TypeError("очікується склад або торговий пост");
+        return true;
+    }
     static bool storage_amount(int argc, py_StackRef argv) {
         PY_CHECK_ARGC(2);
         Object* o = nullptr;
-        if (!obj_arg(py_arg(0), ObjKind::Storage, false, &o)) return false;
+        if (!storage_arg(py_arg(0), &o)) return false;
         PY_CHECK_ARG_TYPE(1, tp_str);
         const Object& s = known_state(o);
         auto it = s.resources.find(py_tostr(py_arg(1)));
@@ -373,7 +398,7 @@ struct RuntimeNatives {
     static bool storage_has_tool(int argc, py_StackRef argv) {
         PY_CHECK_ARGC(2);
         Object* o = nullptr;
-        if (!obj_arg(py_arg(0), ObjKind::Storage, false, &o)) return false;
+        if (!storage_arg(py_arg(0), &o)) return false;
         PY_CHECK_ARG_TYPE(1, tp_str);
         const std::string tool = py_tostr(py_arg(1));
         bool free = false;
@@ -394,6 +419,8 @@ struct RuntimeNatives {
             py_newfloat(py_retval(), h.temperature);
         else if (key == "heated")
             py_newbool(py_retval(), h.firewood > 0);
+        else if (key == "beds")
+            py_newint(py_retval(), h.beds);
         else
             return ValueError("невідома властивість '%s'", key.c_str());
         return true;
@@ -404,8 +431,10 @@ struct RuntimeNatives {
         if (!obj_arg(py_arg(0), ObjKind::House, false, &o)) return false;
         PY_CHECK_ARG_TYPE(1, tp_str);
         const Object& h = known_state(o);
-        auto it = h.chest.find(py_tostr(py_arg(1)));
-        py_newint(py_retval(), it == h.chest.end() ? 0 : it->second);
+        const std::string kind = py_tostr(py_arg(1));
+        int n = 0;
+        for (const Garment& g : h.chest) n += g.kind == kind ? 1 : 0;
+        py_newint(py_retval(), n);
         return true;
     }
     static bool field_info(int argc, py_StackRef argv) {
@@ -418,6 +447,10 @@ struct RuntimeNatives {
         std::string key = py_tostr(py_arg(1));
         if (key == "state")
             py_newstr(py_retval(), k ? field_state_name(f.field_state) : "unknown");
+        else if (key == "crop")
+            f.crop.empty() ? py_newnone(py_retval()) : py_newstr(py_retval(), f.crop.c_str());
+        else if (key == "watered")
+            py_newbool(py_retval(), k && f.watered_until > me().local_time);
         else if (key == "growth")
             py_newfloat(py_retval(), f.growth);
         else if (key == "grain_left")
@@ -430,7 +463,7 @@ struct RuntimeNatives {
         PY_CHECK_ARGC(2);
         Object* o = nullptr;
         if (!obj_arg(py_arg(0), ObjKind::Storage, true, &o)) return false;
-        if (!is_building(o->kind)) return TypeError("очікується будівля (склад, будинок, поле, хлів або дошка)");
+        if (!is_building(o->kind)) return TypeError("очікується будівля, а не %s", kind_name(o->kind));
         PY_CHECK_ARG_TYPE(1, tp_str);
         World& w = world();
         std::string key = py_tostr(py_arg(1));
@@ -494,11 +527,96 @@ struct RuntimeNatives {
             return ValueError("невідома властивість '%s'", key.c_str());
         return true;
     }
+    // ---- trade
+    static bool town_hall_coins(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(1);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::TownHall, false, &o)) return false;
+        py_newint(py_retval(), known_state(o).coins);
+        return true;
+    }
+    // "for_sale": {item: n} (tools by kind); "orders": [(item, n)] — as this character knows the post.
+    static bool post_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::TradingPost, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        const Object& post = known_state(o);
+        std::string key = py_tostr(py_arg(1));
+        if (key == "for_sale") {
+            std::map<std::string, int> all = post.for_sale;
+            for (const ToolItem& t : post.sale_tools) all[t.kind]++;
+            py_newdict(py_r0());
+            for (const auto& [item, n] : all) {
+                if (n <= 0) continue;
+                py_newint(py_r1(), n);
+                if (!py_dict_setitem_by_str(py_r0(), item.c_str(), py_r1())) return false;
+            }
+        } else if (key == "orders") {
+            py_newlist(py_r0());
+            for (const auto& [item, n] : post.orders) {
+                py_TValue* t = py_newtuple(py_list_emplace(py_r0()), 2);
+                py_newstr(&t[0], item.c_str());
+                py_newint(&t[1], n);
+            }
+        } else {
+            return ValueError("невідома властивість '%s'", key.c_str());
+        }
+        py_assign(py_retval(), py_r0());
+        return true;
+    }
+    // The merchant is public knowledge (news from the road): "here", "next_arrival", "days_until".
+    static bool merchant_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(1);
+        PY_CHECK_ARG_TYPE(0, tp_str);
+        const Merchant& m = world().merchant();
+        std::string key = py_tostr(py_arg(0));
+        if (key == "here") {
+            py_newbool(py_retval(), m.here);
+        } else if (key == "next_arrival") {
+            py_newfloat(py_retval(), m.next_arrival);
+        } else if (key == "days_until") {
+            const double now = me().local_time;
+            const int days = m.here ? 0 : static_cast<int>(std::floor(m.next_arrival / kDay) - std::floor(now / kDay));
+            py_newint(py_retval(), std::max(0, days));
+        } else {
+            return ValueError("невідома властивість '%s'", key.c_str());
+        }
+        return true;
+    }
+    // merchant_price(item, "price" | "offer"): coins per unit, or None.
+    static bool merchant_price(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        PY_CHECK_ARG_TYPE(0, tp_str);
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        const Merchant& m = world().merchant();
+        const std::map<std::string, int>& table = std::string(py_tostr(py_arg(1))) == "offer" ? m.offers : m.prices;
+        auto it = table.find(py_tostr(py_arg(0)));
+        if (it == table.end())
+            py_newnone(py_retval());
+        else
+            py_newint(py_retval(), it->second);
+        return true;
+    }
     static bool meadow_hay(int argc, py_StackRef argv) {
         PY_CHECK_ARGC(1);
         Object* o = nullptr;
         if (!obj_arg(py_arg(0), ObjKind::Meadow, false, &o)) return false;
         py_newint(py_retval(), static_cast<py_i64>(std::floor(known_state(o).hay + kEps)));
+        return true;
+    }
+    static bool deposit_info(int argc, py_StackRef argv) {
+        PY_CHECK_ARGC(2);
+        Object* o = nullptr;
+        if (!obj_arg(py_arg(0), ObjKind::Deposit, false, &o)) return false;
+        PY_CHECK_ARG_TYPE(1, tp_str);
+        std::string key = py_tostr(py_arg(1));
+        if (key == "resource")
+            py_newstr(py_retval(), o->deposit.c_str());  // public: what is mined there
+        else if (key == "left")
+            py_newint(py_retval(), known(o) ? known_state(o).deposit_left : 0);
+        else
+            return ValueError("невідома властивість '%s'", key.c_str());
         return true;
     }
     static bool forest_trees(int argc, py_StackRef argv) {
@@ -830,6 +948,8 @@ void ScriptRuntime::init_vm(Agent* a) {
     py_bindfunc(kn, "char_clothes", RuntimeNatives::char_clothes);
     py_bindfunc(kn, "house_info", RuntimeNatives::house_info);
     py_bindfunc(kn, "house_chest", RuntimeNatives::house_chest);
+    py_bindfunc(kn, "char_clothes_condition", RuntimeNatives::char_clothes_condition);
+    py_bindfunc(kn, "deposit_info", RuntimeNatives::deposit_info);
     py_bindfunc(kn, "field_info", RuntimeNatives::field_info);
     py_bindfunc(kn, "building_info", RuntimeNatives::building_info);
     py_bindfunc(kn, "world_season", RuntimeNatives::world_season);
@@ -841,6 +961,10 @@ void ScriptRuntime::init_vm(Agent* a) {
     py_bindfunc(kn, "forest_trees", RuntimeNatives::forest_trees);
     py_bindfunc(kn, "animal_info", RuntimeNatives::animal_info);
     py_bindfunc(kn, "meadow_hay", RuntimeNatives::meadow_hay);
+    py_bindfunc(kn, "town_hall_coins", RuntimeNatives::town_hall_coins);
+    py_bindfunc(kn, "post_info", RuntimeNatives::post_info);
+    py_bindfunc(kn, "merchant_info", RuntimeNatives::merchant_info);
+    py_bindfunc(kn, "merchant_price", RuntimeNatives::merchant_price);
     py_bindfunc(kn, "world_time", RuntimeNatives::world_time);
     py_bindfunc(kn, "world_day", RuntimeNatives::world_day);
     py_bindfunc(kn, "world_now", RuntimeNatives::world_now);

@@ -4,7 +4,8 @@ extends SceneTree
 ## Arguments after "--": out=<png path>, hours=<game hours to advance before the shot>, help=1 (open the F1 window),
 ## construction=1 (a house blueprint that two characters build), save_dialog=1 (open the save dialog),
 ## outcome=won|lost (the end-of-game window: the first winter survived / everyone starved),
-## animals=1 (a barn with a cow and four chickens).
+## animals=1 (a barn with a cow and four chickens), town_hall=N (the «Управа» window on tab N: 1 — зведення, 2 — запаси, 3 — люди, 4 — монети), first_person=1 (the first-person view between the storage
+## and the house, looking north).
 
 const BUILDERS := """storage = get("Склад_1")
 forest = get("Ліс_1")
@@ -27,7 +28,7 @@ me.move_into(site)
 var _main: Node
 var _frames := 0
 var _args := {"out": "user://screenshot.png", "hours": "3", "help": "0", "construction": "0", "save_dialog": "0",
-	"outcome": "", "animals": "0"}
+	"outcome": "", "animals": "0", "town_hall": "0", "first_person": "0"}
 
 
 func _initialize() -> void:
@@ -69,8 +70,20 @@ func _process(_delta: float) -> bool:
 			_main.check_outcome()
 		if _args["help"] == "1":
 			_main.ui.show_help()
+		if _args["town_hall"] != "0":
+			_main._process(0.0)
+			_main.ui._town_hall_button.pressed.emit()
+			_main.ui._town_hall._tabs.current_tab = int(_args["town_hall"]) - 1
 		if _args["save_dialog"] == "1":
 			_main.ui.ask_save_path("поселення_день_%d.json" % _main.sim.get_day())
+		if _args["first_person"] == "1":
+			_main._set_first_person(true)
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE  # do not take the mouse of whoever runs the tool
+			var rig = _main.camera_rig
+			rig.position = Vector3(6.0, rig.EYE_HEIGHT, 12.0)
+			rig._yaw = 0.0
+			rig._pitch = -3.0
+			rig._apply()
 	if _frames < 40:
 		return false
 	var image := root.get_texture().get_image()

@@ -59,6 +59,9 @@ void KindleSimulation::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_buildings"), &KindleSimulation::get_buildings);
     ClassDB::bind_method(D_METHOD("get_characters"), &KindleSimulation::get_characters);
     ClassDB::bind_method(D_METHOD("get_animals"), &KindleSimulation::get_animals);
+    ClassDB::bind_method(D_METHOD("get_merchant"), &KindleSimulation::get_merchant);
+    ClassDB::bind_method(D_METHOD("get_stats_size"), &KindleSimulation::get_stats_size);
+    ClassDB::bind_method(D_METHOD("get_stats"), &KindleSimulation::get_stats);
     ClassDB::bind_method(D_METHOD("add_animal", "species", "barn"), &KindleSimulation::add_animal);
     ClassDB::bind_method(D_METHOD("add_blueprint", "kind", "name", "position"), &KindleSimulation::add_blueprint);
     ClassDB::bind_method(D_METHOD("get_build_costs"), &KindleSimulation::get_build_costs);
@@ -92,8 +95,10 @@ void KindleSimulation::start(const Dictionary& options) {
     scene.axes = int(options.get("axes", scene.characters));
     scene.sickles = int(options.get("sickles", 0));
     scene.scythes = int(options.get("scythes", 0));
+    scene.pickaxes = int(options.get("pickaxes", 0));
     scene.bread = int(options.get("bread", 40));
     scene.grain = int(options.get("grain", 0));
+    scene.flax = int(options.get("flax", 0));
     scene.trees = int(options.get("trees", 200));
     scene.warm_clothes = int(options.get("warm_clothes", -1));
     // For tests and screenshots: another start moment or a weak settlement.
@@ -175,6 +180,7 @@ Array KindleSimulation::get_buildings() const {
         Dictionary d;
         d["id"] = o.id;
         d["kind"] = kindle::kind_name(o.kind);
+        if (o.kind == kindle::ObjKind::Workshop) d["workshop"] = to_godot(o.workshop);
         d["name"] = to_godot(o.name);
         d["position"] = Vector2(real_t(o.pos.x), real_t(o.pos.y));
         if (o.kind == kindle::ObjKind::Storage) {
@@ -188,10 +194,13 @@ Array KindleSimulation::get_buildings() const {
             d["firewood"] = o.firewood;
             d["temperature"] = o.temperature;
             d["heated"] = o.firewood > 0;
-            d["chest"] = to_dictionary(o.chest);
+            d["chest"] = to_dictionary(kindle::garment_counts(o.chest));
+            d["beds"] = o.beds;
         }
         if (o.kind == kindle::ObjKind::Field) {
             d["state"] = kindle::field_state_name(o.field_state);
+            d["crop"] = to_godot(o.crop);
+            d["watered"] = o.watered_until > w.now();
             d["growth"] = o.growth;
             d["grain_left"] = o.grain_left;
         }
@@ -208,6 +217,10 @@ Array KindleSimulation::get_buildings() const {
                 if (c.alive && c.home == o.id) residents.push_back(to_godot(c.name));
             d["residents"] = residents;
         }
+        if (o.kind == kindle::ObjKind::Deposit) {
+            d["resource"] = to_godot(o.deposit);
+            d["left"] = o.deposit_left;
+        }
         if (o.kind == kindle::ObjKind::Forest) {
             d["trees_left"] = w.forest_trees_left(o);
             d["trees_total"] = o.trees_total;
@@ -216,6 +229,23 @@ Array KindleSimulation::get_buildings() const {
         if (o.kind == kindle::ObjKind::Barn) {
             d["capacity"] = o.capacity;
             d["animals"] = w.animals_count(o.id);
+        }
+        if (o.kind == kindle::ObjKind::TownHall) d["coins"] = o.coins;
+        if (o.kind == kindle::ObjKind::TradingPost) {
+            std::map<std::string, int> for_sale = o.for_sale, received = o.resources;
+            for (const kindle::ToolItem& t : o.sale_tools) for_sale[t.kind]++;
+            for (const kindle::ToolItem& t : o.tools) received[t.kind]++;
+            d["for_sale"] = to_dictionary(for_sale);
+            d["received"] = to_dictionary(received);
+            Array orders;
+            for (const auto& [item, n] : o.orders) {
+                Array pair;
+                pair.push_back(to_godot(item));
+                pair.push_back(n);
+                orders.push_back(pair);
+            }
+            d["orders"] = orders;
+            d["merchant_here"] = w.merchant().here && w.merchant().post == o.id;
         }
         if (o.kind == kindle::ObjKind::Meadow) {
             d["hay"] = int(std::floor(o.hay + 1e-6));
@@ -244,7 +274,8 @@ Array KindleSimulation::get_characters() const {
         d["warmth"] = c.warmth;
         d["tool"] = to_godot(c.tool.kind);
         d["tool_condition"] = c.tool.empty() ? -1.0 : c.tool.condition;
-        d["clothes"] = to_godot(c.clothes);
+        d["clothes"] = to_godot(c.clothes.kind);
+        d["clothes_condition"] = c.clothes.empty() ? -1.0 : c.clothes.condition;
         d["home"] = c.home >= 0 ? to_godot(w.objects()[c.home].name) : String();
         d["carrying"] = to_dictionary(c.carrying);
         const kindle::AgentState state = rt.state(c.obj);
@@ -255,6 +286,7 @@ Array KindleSimulation::get_characters() const {
         d["line_file"] = file == kindle::CodeFile::Shared ? "shared" : (file == kindle::CodeFile::Own ? "own" : "");
         const kindle::Action* a = w.current_action(c.obj);
         d["action"] = a ? to_godot(a->name) : String();
+        d["action_item"] = a ? to_godot(a->params.item) : String();  // craft: what is being made
         const kindle::Object* target = a ? w.object(a->target) : nullptr;
         d["action_target"] = target ? to_godot(target->name) : String();
         d["death_cause"] = to_godot(c.death_cause);
@@ -286,6 +318,63 @@ Array KindleSimulation::get_animals() const {
     return result;
 }
 
+Dictionary KindleSimulation::get_merchant() const {
+    Dictionary d;
+    if (!sim_) return d;
+    kindle::World& w = sim_->world();
+    const kindle::Merchant& m = w.merchant();
+    d["here"] = m.here;
+    d["days_until"] = m.here ? 0 : std::max(0, int(std::floor(m.next_arrival / kindle::kDay) - std::floor(w.now() / kindle::kDay)));
+    d["arrival_text"] = to_godot(w.format_time(m.next_arrival));
+    const kindle::Object* post = w.object(m.post);
+    d["post"] = m.here && post ? to_godot(post->name) : String();
+    d["prices"] = to_dictionary(m.prices);
+    d["offers"] = to_dictionary(m.offers);
+    return d;
+}
+
+int KindleSimulation::get_stats_size() const { return sim_ ? int(sim_->world().stats().size()) : 0; }
+
+Dictionary KindleSimulation::get_stats() const {
+    Dictionary d;
+    if (!sim_) return d;
+    const auto& stats = sim_->world().stats();
+    PackedFloat64Array days, coins, people, health, hunger, warmth, fatigue, animals;
+    std::map<std::string, PackedFloat64Array> stock;
+    for (const kindle::StatSample& s : stats)
+        for (const auto& [res, n] : s.stock) stock[res];  // every resource that ever was in a storage
+    for (const kindle::StatSample& s : stats) {
+        days.push_back(s.time / kindle::kDay + 1.0);
+        coins.push_back(s.coins);
+        people.push_back(s.people);
+        health.push_back(s.health);
+        hunger.push_back(s.hunger);
+        warmth.push_back(s.warmth);
+        fatigue.push_back(s.fatigue);
+        animals.push_back(s.animals);
+        for (auto& [res, values] : stock) {
+            auto it = s.stock.find(res);
+            values.push_back(it == s.stock.end() ? 0 : it->second);
+        }
+    }
+    d["days"] = days;
+    d["coins"] = coins;
+    d["people"] = people;
+    d["health"] = health;
+    d["hunger"] = hunger;
+    d["warmth"] = warmth;
+    d["fatigue"] = fatigue;
+    d["animals"] = animals;
+    Dictionary stock_d;
+    for (const auto& [res, values] : stock) {
+        bool any = false;
+        for (double v : values) any = any || v > 0;
+        if (any) stock_d[to_godot(res)] = values;
+    }
+    d["stock"] = stock_d;
+    return d;
+}
+
 String KindleSimulation::add_animal(const String& species, const String& barn) {
     ERR_FAIL_COND_V_MSG(!sim_, "start() first", "call start() first");
     kindle::World& w = sim_->world();
@@ -307,28 +396,45 @@ String KindleSimulation::add_blueprint(const String& kind, const String& name, c
         k = kindle::ObjKind::Field;
     else if (kind == "barn")
         k = kindle::ObjKind::Barn;
+    else if (kind == "trading_post")
+        k = kindle::ObjKind::TradingPost;
     else if (kind == "board")
         k = kindle::ObjKind::Board;
+    else if (balance_.workshops.count(to_std(kind)))
+        k = kindle::ObjKind::Workshop;
     else
         return to_godot("Невідомий тип будівлі");
     std::string error;
-    if (sim_->world().add_blueprint(k, to_std(name), {position.x, position.y}, error) < 0) return to_godot(error);
+    const std::string workshop = k == kindle::ObjKind::Workshop ? to_std(kind) : std::string();
+    if (sim_->world().add_blueprint(k, to_std(name), {position.x, position.y}, error, workshop) < 0) return to_godot(error);
     return String();
 }
 
 Dictionary KindleSimulation::get_build_costs() const {
-    Dictionary costs;
-    auto entry = [](double wood, double hours) {
+    Dictionary costs;  // in the order of the "Будувати" menu
+    auto entry = [](const std::string& name, const std::string& prefix, const std::map<std::string, int>& materials,
+                    double hours) {
         Dictionary d;
-        d["wood"] = int(std::lround(wood));
+        d["name"] = to_godot(name);
+        d["prefix"] = to_godot(prefix);  // blueprints are named "<prefix>_N"
+        d["materials"] = to_dictionary(materials);
         d["hours"] = hours;
         return d;
     };
-    costs["house"] = entry(balance_.house_build_wood, balance_.house_build_hours);
-    costs["storage"] = entry(balance_.storage_build_wood, balance_.storage_build_hours);
-    costs["field"] = entry(0, balance_.field_build_hours);
-    costs["barn"] = entry(balance_.barn_build_wood, balance_.barn_build_hours);
-    costs["board"] = entry(balance_.board_build_wood, balance_.board_build_hours);
+    auto wood = [](double n) { return std::map<std::string, int>{{"wood", int(std::lround(n))}}; };
+    costs["house"] = entry("Будинок", "Будинок", wood(balance_.house_build_wood), balance_.house_build_hours);
+    costs["storage"] = entry("Склад", "Склад", wood(balance_.storage_build_wood), balance_.storage_build_hours);
+    costs["field"] = entry("Поле", "Поле", {}, balance_.field_build_hours);
+    costs["barn"] = entry("Хлів", "Хлів", wood(balance_.barn_build_wood), balance_.barn_build_hours);
+    for (const auto& [type, w] : balance_.workshops) {
+        std::string prefix = w.name;
+        for (char& ch : prefix)
+            if (ch == ' ') ch = '_';
+        costs[to_godot(type)] = entry(w.name, prefix, w.materials, w.hours);
+    }
+    costs["trading_post"] = entry("Торговий пост", "Торговий_пост", wood(balance_.trading_post_build_wood),
+                                  balance_.trading_post_build_hours);
+    costs["board"] = entry("Дошка оголошень", "Дошка", wood(balance_.board_build_wood), balance_.board_build_hours);
     return costs;
 }
 

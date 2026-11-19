@@ -82,9 +82,10 @@ while True:
     ctx.info(buf);
     ctx.check(cold.warmth < 40, "у звичайному одязі взимку персонаж мерзне");
     ctx.check(find_log(w, "мерзне").has_value(), "попередження «мерзне» в журналі");
-    ctx.check(warm.warmth > 80 && warm.clothes == "warm_clothes", "у теплому одязі тепло тримається");
+    ctx.check(warm.warmth > 80 && warm.clothes.kind == "warm_clothes", "у теплому одязі тепло тримається");
     Object& house = obj(w, "Будинок_1");
-    ctx.check(house.chest["warm_clothes"] == 1 && house.chest["clothes"] == 1, "одяг поміняли через скриню будинку");
+    ctx.check(garment_counts(house.chest)["warm_clothes"] == 1 && garment_counts(house.chest)["clothes"] == 1,
+              "одяг поміняли через скриню будинку");
     ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
 }
 
@@ -444,13 +445,20 @@ except ActionError:
     pass
 me.put_back(storage)
 assert len(tools(Axe, free=True)) == 1 and len([a for a in tools(Axe) if a.is_broken]) == 1
-try:
-    me.take(first)  # саме ту — а вона зламана
-    assert False
-except ToolBrokenError:
-    pass
+me.take(first)  # зламану теж можна взяти — щоб розібрати
+assert me.tool == first and me.tool.is_broken, me.tool
+assert me.dismantle() == 2 and me.tool is None
+assert me.carrying.get("scrap") == 2 and me.carrying.get("wood") == 1, me.carrying
+me.drop(storage)
+assert [a for a in tools(Axe) if a.is_broken] == []  # розібрана зникла
 me.take(Axe, storage)  # найкраща ціла
 assert me.tool.condition == 100 and me.tool != first
+me.put_back(storage)
+try:
+    me.dismantle()
+    assert False, "у руках нічого немає"
+except NoItemError:
+    pass
 notify("знос ok")
 )PY");
     s.run_until(at(7, 12), 120);
@@ -458,7 +466,8 @@ notify("знос ok")
     if (broke) ctx.info(broke->text + " — " + w.format_time(broke->time));
     ctx.check(find_log(w, "майже зношений").has_value(), "журнал попереджає, що сокира майже зношена");
     ctx.check(find_log(w, "зламався інструмент").has_value(), "журнал записує поломку");
-    ctx.check(find_log(w, "знос ok").has_value(), "зламаний інструмент: ToolBrokenError, put_back, take іншого");
+    ctx.check(find_log(w, "знос ok").has_value(), "зламаний інструмент: ToolBrokenError, розбирання, take іншого");
+    ctx.check(obj(w, "Склад_1").resources["scrap"] == 2, "брухт розібраної сокири — на складі");
     const int wood = obj(w, "Склад_1").resources["wood"];
     ctx.info("нарубано дров однією сокирою: " + std::to_string(wood));
     ctx.check(wood >= 100 && wood <= 140, "сокира живе ~40 год рубки (~120 дров)");
@@ -469,9 +478,8 @@ notify("знос ok")
     auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
     ctx.check(loaded && save_game(*loaded) == text, "стан інструментів зберігається: " + err);
     if (loaded) {
-        int broken = 0;
-        for (const ToolItem& t : loaded->world().object(w.find("Склад_1")->id)->tools) broken += t.broken() ? 1 : 0;
-        ctx.check(broken == 1, "після завантаження зламана сокира лишається зламаною");
+        const Object& st = *loaded->world().object(w.find("Склад_1")->id);
+        ctx.check(st.tools.size() == 1 && !st.tools[0].broken(), "після завантаження на складі — ціла сокира");
     }
 }
 
@@ -585,6 +593,446 @@ notify("нагодовано")
         auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
         ctx.check(loaded && save_game(*loaded) == text, "стан тварин зберігається: " + err);
     }
+}
+
+// ------------------------------------------------------------------ trade
+
+void t_trade(Ctx& ctx) {
+    {
+        // Goods for sale on the post, orders; the merchant trades when he leaves at 20:00.
+        Opts o;
+        o.wood = 30;
+        o.bread = 20;
+        o.start_day = 5;  // the merchant comes today at 08:00
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        w.add_trading_post("Торговий_пост_1", {-80, -80});
+        w.add_barn("Хлів_1", {-60, 60});
+        obj(w, "Управа_1").coins = 200;
+        const Merchant visit = w.merchant();  // prices of today's visit
+        s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+post = get("Торговий_пост_1")
+hall = get("Управа_1")
+assert isinstance(post, TradingPost) and isinstance(hall, TownHall)
+assert merchant.days_until == 0 and not merchant.is_here  # сьогодні о 08:00
+assert merchant.price("grain") is not None and merchant.price(Cow) is not None and merchant.price("wood") is None
+assert merchant.offer("wood") >= 1
+
+@on(Event.MERCHANT_ARRIVED)
+def arrived(me):
+    notify("купець приїхав")
+
+me.pick_up(storage, "wood", 10)
+me.drop(post)
+assert post.for_sale == {"wood": 10}, post.for_sale
+for item, n in (("grain", 5), (Chicken, 1), (Axe, 1), (WarmClothes, 1), (Cow, 1)):
+    me.order(post, item, n)
+assert post.orders == [("grain", 5), ("chicken", 1), ("axe", 1), ("warm_clothes", 1), ("cow", 1)], post.orders
+try:
+    me.order(post, "wood")
+    assert False, "дров купець не продає"
+except ActionError:
+    pass
+me.wait_until(time(20, 30))
+
+me.go_to(post)
+assert post.for_sale == {} and post.orders == [], (post.for_sale, post.orders)
+assert post.amount("grain") == 5 and post.has_tool(Axe) and post.amount("warm_clothes") == 1
+me.pick_up(post, "grain", 5)
+me.drop(storage)
+me.take(Axe, post)
+me.put_back(storage)
+me.pick_up(post, "warm_clothes", 1)
+me.drop(get("Будинок_1"))  # одяг — у скриню
+assert get("Будинок_1").has(WarmClothes)
+assert len(animals(Chicken)) == 1 and animals(Chicken)[0].home == get("Хлів_1")
+assert animals(Cow) == []  # на корову не вистачило монет
+me.go_to(hall)
+notify(f"в управі монет: {hall.coins}")
+)PY");
+        s.run_until(at(5, 23));
+        ctx.check(find_log(w, "купець приїхав").has_value(), "@on(Event.MERCHANT_ARRIVED) спрацьовує");
+        ctx.check(find_log(w, "не вистачило").has_value(), "замовлення, на яке бракує монет, скасовано із записом");
+        ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+        const int expected = 200 + 10 * visit.offers.at("wood") -
+                             (5 * visit.prices.at("grain") + visit.prices.at("chicken") + visit.prices.at("axe") +
+                              visit.prices.at("warm_clothes"));
+        auto coins = find_log(w, "в управі монет:");
+        if (coins) ctx.info(coins->text + ", очікувано " + std::to_string(expected));
+        ctx.check(coins && coins->text == "в управі монет: " + std::to_string(expected),
+                  "управа отримала виручку й заплатила за замовлення");
+        ctx.check(obj(w, "Склад_1").resources["grain"] == 5, "куплене зерно перенесено на склад");
+        ctx.check(w.merchant().next_arrival > at(10, 0) && w.merchant().next_arrival < at(10, 12),
+                  "наступний приїзд — за 5 днів");
+
+        const std::string text = save_game(s);
+        std::string err;
+        auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+        ctx.check(loaded && save_game(*loaded) == text, "торгівля зберігається: " + err);
+    }
+    {
+        Opts o;
+        o.start_day = 5;
+        Simulation& s = ctx.sim(o);
+        World& w = s.world();
+        s.run_until(at(5, 12));
+        ctx.check(find_log(w, "проїхав повз").has_value(), "без торгового поста купець проїжджає повз");
+    }
+}
+
+// ------------------------------------------------------------------ statistics for the town hall charts
+
+void t_stats(Ctx& ctx) {
+    Opts o;
+    o.chars = 2;
+    o.bread = 30;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    std::string woodcutter;
+    if (!load_script(ctx, "scripts/woodcutter.py", woodcutter)) return;
+    s.runtime().set_code(w.char_obj_id(0), woodcutter);
+    s.run_until(at(3, 5, 30));  // two days from the start at 05:30
+    const auto& st = w.stats();
+    ctx.info("знімків: " + std::to_string(st.size()));
+    ctx.check(st.size() == 49, "знімок щогодини: за дві доби — 48 і стартовий");
+    if (st.size() < 2) return;
+    ctx.check(st[0].time == at(1, 5, 30) && st[1].time == at(1, 6) && st.back().time == at(3, 5),
+              "стартовий знімок, далі — на початку кожної години");
+    ctx.info("дров: " + std::to_string(st.front().stock.at("wood")) + " → " + std::to_string(st.back().stock.at("wood")));
+    ctx.check(st.back().stock.at("wood") > st.front().stock.at("wood"), "запас дров на складах росте");
+    ctx.check(st.back().stock.at("bread") < st.front().stock.at("bread"), "хліб з'їдають");
+    ctx.check(st.back().people == 2 && st.back().coins == 50 && st.back().animals == 0, "люди, монети, тварини");
+    ctx.check(st.back().health > 0 && st.back().health <= 100 && st.back().hunger >= 0, "середні показники людей");
+
+    const std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && loaded->world().stats().size() == st.size() && save_game(*loaded) == text,
+              "історія зберігається: " + err);
+}
+
+// ------------------------------------------------------------------ workshops and recipes
+
+void t_craft(Ctx& ctx) {
+    Opts o;
+    o.chars = 2;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    w.add_workshop("smithy", "Кузня_1", {-60, -60});
+    obj(w, "Склад_1").resources["scrap"] = 5;
+    obj(w, "Склад_1").resources["wood"] = 10;
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+smithy = get("Кузня_1")
+assert isinstance(smithy, Smithy) and smithy in buildings(Smithy) and smithy in buildings(Workshop)
+try:
+    me.craft(Axe, smithy)
+    assert False, "у руках немає матеріалів"
+except NoItemError:
+    pass
+try:
+    me.craft(Axe, get("Будинок_1"))
+    assert False, "сокиру кують у кузні"
+except ActionError:
+    pass
+me.pick_up(storage, "scrap", 3)
+me.pick_up(storage, "wood", 3)
+start = world.now
+assert me.craft(Axe, smithy) == 1
+took = world.now - start
+assert hours(2) <= took < hours(2) + minutes(30), took
+assert isinstance(me.tool, Axe) and me.tool.condition == 100 and me.tool.quality == 1, me.tool
+assert me.carrying == {"scrap": 1, "wood": 1}, me.carrying
+try:
+    me.craft(Sickle, smithy)
+    assert False, "руки зайняті сокирою"
+except ActionError:
+    pass
+me.put_back(storage)
+assert me.craft(Sickle, smithy) == 1 and isinstance(me.tool, Sickle)
+me.put_back(storage)
+notify("кузня ok")
+)PY");
+    s.runtime().set_code(w.char_obj_id(1), R"PY(
+storage = get("Склад_1")
+me.pick_up(storage, "scrap", 2)
+me.pick_up(storage, "wood", 2)
+me.wait_until(time(7, 0))
+try:
+    me.craft(Scythe, get("Кузня_1"))
+    assert False, "горн зайнятий"
+except WorkplaceBusyError:
+    notify("горн зайнятий")
+)PY");
+    s.run_until(at(1, 12));
+    ctx.check(find_log(w, "кузня ok").has_value(), "у кузні з брухту й дров виходять сокира й серп");
+    ctx.check(find_log(w, "горн зайнятий").has_value(), "горн — одне робоче місце (WorkplaceBusyError)");
+    const Object& st = obj(w, "Склад_1");
+    ctx.check(tools_of(st, "axe") == 2 && tools_of(st, "sickle") == 1, "нові інструменти — на складі");
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// The clothes chain: flax on the field → cloth and clothes in the tailor's shop → the house chest;
+// clothes wear while worn and turn into rags.
+void t_clothes(Ctx& ctx) {
+    Opts o;
+    o.chars = 2;
+    o.sickles = 1;
+    o.flax = 20;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_workshop("tailor", "Кравецька_1", {-60, -60});
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+field = get("Поле_1")
+me.pick_up(storage, "flax", 10)
+try:
+    me.sow(field, crop="oats")
+    assert False, "такої культури немає"
+except ActionError:
+    pass
+me.sow(field, crop="flax")
+assert field.state == "sown" and field.crop == "flax", (field.state, field.crop)
+assert "flax" not in me.carrying, me.carrying
+notify("льон посіяно")
+)PY");
+    s.run_until(at(1, 12));
+    ctx.check(find_log(w, "льон посіяно").has_value(), "льон сіють, як зерно: me.sow(поле, crop=\"flax\")");
+    obj(w, "Поле_1").growth = 0.999;  // growing itself is the grain field's test
+    s.run_until(at(1, 13));
+    const Object& field = obj(w, "Поле_1");
+    ctx.check(field.field_state == FieldState::Ripe && field.crop == "flax" &&
+                  field.grain_left == static_cast<int>(b.flax_yield),
+              "дозріле поле льону дає flax_yield льону");
+
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+field = get("Поле_1")
+tailor = get("Кравецька_1")
+assert isinstance(tailor, Tailor) and tailor in buildings(Workshop)
+me.take(Sickle, storage)
+assert me.harvest(field, amount=10) == 10
+assert me.carrying == {"flax": 10}, me.carrying
+me.put_back(storage)
+try:
+    me.craft(Clothes, tailor)
+    assert False, "без тканини"
+except NoItemError:
+    pass
+assert me.craft("cloth", tailor, amount=5) == 5
+assert me.carrying == {"cloth": 5}, me.carrying
+assert me.craft(Clothes, tailor) == 1
+assert me.carrying == {"cloth": 2, "clothes": 1}, me.carrying
+me.drop(me.home)
+assert me.carrying == {"cloth": 2}, me.carrying
+me.drop(storage)
+notify("кравецька ok")
+)PY");
+    s.run_until(at(2, 2));
+    ctx.check(find_log(w, "кравецька ok").has_value(), "льон → тканина → одяг у кравецькій, одяг — у скриню");
+    ctx.check(obj(w, "Склад_1").resources["cloth"] == 2, "решта тканини — на складі");
+
+    Character& c = w.character(w.char_obj_id(1));
+    c.clothes.condition = b.clothes_worn_warning + 0.05;
+    s.run_until(at(2, 3));
+    ctx.check(find_log(w, "майже зношений").has_value(), "журнал попереджає, що одяг майже зношений");
+    c.clothes.condition = 0.1;
+    s.run_until(at(2, 4));
+    ctx.check(c.clothes.empty() && c.carrying["rags"] == 1 && find_log(w, "ганчір'я").has_value(),
+              "зношений одяг стає ганчір'ям у руках, персонаж без одягу");
+
+    obj(w, "Будинок_1").chest.push_back(Garment{"clothes", 50});
+    s.runtime().set_code(w.char_obj_id(1), R"PY(
+assert me.clothes is None and me.clothes_condition is None
+me.wear(Clothes)
+assert me.clothes == Clothes and me.clothes_condition > 99, me.clothes_condition  # новий комплект
+me.wear(WarmClothes)
+assert me.clothes == WarmClothes
+notify("переодягнено")
+)PY");
+    s.run_until(at(2, 5));
+    ctx.check(find_log(w, "переодягнено").has_value(), "зі скрині береться комплект у найкращому стані");
+    int fresh = 0, worn = 0;
+    for (const Garment& g : obj(w, "Будинок_1").chest) {
+        fresh += g.kind == "clothes" && g.condition > 99 ? 1 : 0;
+        worn += g.kind == "clothes" && g.condition == 50 ? 1 : 0;
+    }
+    ctx.check(fresh == 1 && worn == 1, "знятий одяг повертається в скриню зі своїм станом");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "стан одягу й культура поля зберігаються: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// The wood chain: wood → planks at the sawmill → (planks are a building material) → a bed at the carpentry →
+// the house; a bed makes sleep restore faster.
+void t_wood(Ctx& ctx) {
+    Opts o;
+    o.chars = 2;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_workshop("sawmill", "Лісопилка_1", {-60, -60});
+    w.add_workshop("carpentry", "Столярня_1", {-60, 60});
+    std::string err;
+    ctx.check(w.add_blueprint(ObjKind::Workshop, "Столярня_2", {-120, 0}, err, "carpentry") >= 0, "креслення столярні: " + err);
+    obj(w, "Склад_1").resources["wood"] = 10;
+    obj(w, "Склад_1").resources["hay"] = 3;
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+storage = get("Склад_1")
+sawmill = get("Лісопилка_1")
+carpentry = get("Столярня_1")
+assert isinstance(sawmill, Sawmill) and isinstance(carpentry, Carpentry)
+me.pick_up(storage, "wood", 6)
+n = me.craft("planks", sawmill)
+assert n == 6, (n, me.carrying)
+assert me.carrying == {"planks": 6}, me.carrying
+assert me.deliver(get("Столярня_2")) == 6  # дошки — матеріал будови
+assert get("Столярня_2").needs == {"wood": 10, "planks": 14}, get("Столярня_2").needs
+me.pick_up(storage, "wood", 4)
+assert me.craft("planks", sawmill, amount=4) == 4
+me.pick_up(storage, "hay", 3)
+assert me.craft("bed", carpentry) == 1
+assert me.carrying == {"bed": 1}, me.carrying
+house = me.home
+assert house.beds == 0
+me.drop(house)
+assert house.beds == 1 and me.carrying == {}, (house.beds, me.carrying)
+notify("ліжко в будинку")
+)PY");
+    s.run_until(at(1, 14));
+    ctx.check(find_log(w, "ліжко в будинку").has_value(), "дрова → дошки → ліжко → будинок");
+    ctx.check(obj(w, "Будинок_1").beds == 1, "у будинку одне ліжко");
+
+    // Both sleep from the same fatigue: the first resident has the bed.
+    Character& in_bed = w.character(w.char_obj_id(0));
+    Character& on_floor = w.character(w.char_obj_id(1));
+    ctx.check(w.has_bed(in_bed) && !w.has_bed(on_floor), "ліжко дістається першому мешканцеві");
+    for (int i = 0; i < 2; ++i) {
+        w.character(w.char_obj_id(i)).fatigue = 80;
+        s.runtime().set_code(w.char_obj_id(i), "me.sleep(hours=2)\n");
+    }
+    s.run_until(at(1, 17));
+    const double gain = (b.fatigue_sleep_home_per_hour - b.fatigue_sleep_bed_per_hour) * 2;
+    ctx.check(std::abs(on_floor.fatigue - in_bed.fatigue - gain) < 1.5,
+              "у ліжку сон знімає втому швидше: " + std::to_string(in_bed.fatigue) + " проти " + std::to_string(on_floor.fatigue));
+
+    std::string text = save_game(s);
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "ліжка зберігаються: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// Stone and metal: a pickaxe mines stone in the quarry and ore in the mine; the kiln burns wood into charcoal;
+// the smithy smelts iron from ore and charcoal and forges tools from iron (the second variant of their recipes).
+void t_mining(Ctx& ctx) {
+    Opts o;
+    o.pickaxes = 1;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_workshop("kiln", "Вуглярня_1", {-80, -20});
+    w.add_workshop("smithy", "Кузня_1", {-60, -60});
+    obj(w, "Склад_1").resources["wood"] = 8;
+    s.runtime().set_code(w.char_obj_id(0), "QUARRY = " + std::to_string(static_cast<int>(b.quarry_stone)) + R"PY(
+storage = get("Склад_1")
+quarry = get("Кар'єр_1")
+ore_pit = get("Рудня_1")
+assert isinstance(quarry, Deposit) and quarry.resource == "stone" and ore_pit.resource == "ore"
+assert quarry.left == 0  # ще не бачив
+try:
+    me.mine(quarry)
+    assert False, "без кайла"
+except NoItemError:
+    pass
+me.take(Pickaxe, storage)
+assert me.mine(quarry, amount=3) == 3 and me.carrying == {"stone": 3}, me.carrying
+assert quarry.left == QUARRY - 3, quarry.left
+me.drop(storage)
+assert me.mine(ore_pit) == 6  # до повних рук: 6 × 8 кг
+me.put_back(storage)
+me.drop(storage)
+kiln = get("Вуглярня_1")
+me.pick_up(storage, "wood", 6)
+assert me.craft("charcoal", kiln) == 2 and me.carrying == {"charcoal": 2}, me.carrying
+me.pick_up(storage, "ore", 4)
+smithy = get("Кузня_1")
+assert me.craft("iron", smithy) == 2 and me.carrying == {"iron": 2}, me.carrying
+me.pick_up(storage, "wood", 2)
+assert me.craft(Axe, smithy) == 1 and isinstance(me.tool, Axe) and me.carrying == {}, me.carrying
+me.put_back(storage)
+notify("залізна сокира")
+)PY");
+    s.run_until(at(2, 2));
+    ctx.check(find_log(w, "залізна сокира").has_value(), "кайло → камінь і руда; дрова → вугілля; руда + вугілля → залізо → сокира");
+    const Object& st = obj(w, "Склад_1");
+    ctx.check(st.resources.at("stone") == 3 && st.resources.at("ore") == 2 && tools_of(st, "axe") == 2,
+              "на складі камінь, решта руди й нова сокира");
+    ctx.check(obj(w, "Рудня_1").deposit_left == static_cast<int>(b.mine_ore) - 6, "рудня вичерпується");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "родовища й кайло зберігаються: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
+}
+
+// Water: buckets from the well (a recipe without inputs, until the hands are full); a watered field grows
+// field_water_growth_bonus faster for a day; rain waters sown fields too.
+void t_water(Ctx& ctx) {
+    Opts o;
+    o.bread = 20;
+    Simulation& s = ctx.sim(o);
+    World& w = s.world();
+    const Balance& b = w.balance();
+    w.add_workshop("well", "Колодязь_1", {60, -60});
+    w.add_field("Поле_2", {200, -120});
+    for (const char* name : {"Поле_1", "Поле_2"}) {
+        Object& f = obj(w, name);
+        f.field_state = FieldState::Sown;
+        f.crop = "grain";
+    }
+    s.runtime().set_code(w.char_obj_id(0), R"PY(
+well = get("Колодязь_1")
+field = get("Поле_1")
+assert isinstance(well, Well)
+try:
+    me.water(field)
+    assert False, "без води"
+except NoItemError:
+    pass
+assert me.draw_water(well) == 5 and me.carrying == {"water": 5}, me.carrying
+me.water(field)
+assert field.is_watered and me.carrying == {}, (field.is_watered, me.carrying)
+assert not get("Поле_2").is_watered  # не бачив
+notify("полито")
+)PY");
+    s.run_until(at(1, 10));
+    ctx.check(find_log(w, "полито").has_value(), "вода з колодязя (до повних рук) — на поле");
+    const double g1 = obj(w, "Поле_1").growth, g2 = obj(w, "Поле_2").growth;
+    s.run_until(at(1, 20));
+    const double d1 = obj(w, "Поле_1").growth - g1, d2 = obj(w, "Поле_2").growth - g2;
+    ctx.check(d2 > 0 && std::abs(d1 / d2 - (1.0 + b.field_water_growth_bonus)) < 0.01,
+              "полите поле росте швидше: " + std::to_string(d1) + " проти " + std::to_string(d2));
+
+    w.add_rain(at(2, 6), at(2, 7));
+    s.run_until(at(2, 8));
+    ctx.check(obj(w, "Поле_2").watered_until >= at(2, 7) + b.field_rain_soak_hours * 3600.0 - 60,
+              "дощ поливає посіяне поле ще на field_rain_soak_hours після себе");
+
+    std::string text = save_game(s);
+    std::string err;
+    auto loaded = load_game(proto::load_balance(proto::source_path("config/balance.json"), false), text, err);
+    ctx.check(loaded && save_game(*loaded) == text, "полив зберігається: " + err);
+    ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");
 }
 
 // The end of the game: the first winter survived (once, survives save/load) or everyone dead.
@@ -704,7 +1152,8 @@ notify(f"живу в {site.name}: {len(site.residents)}/{site.capacity}")
     if (built) ctx.info("збудовано: " + w.format_time(built->time) + " (16 год роботи на двох)");
     ctx.check(built && built->time > at(1, 12) && built->time < at(1, 16), "двоє будують 16-годинний будинок за ~8 год");
     ctx.check(find_log(w, "/4").has_value() && find_log(w, ": 2/4").has_value(), "обоє заселилися (2 з 4 місць)");
-    ctx.check(obj(w, "Будинок_1").chest["warm_clothes"] == 0 && obj(w, "Будинок_2").chest["warm_clothes"] == 2,
+    ctx.check(garment_counts(obj(w, "Будинок_1").chest)["warm_clothes"] == 0 &&
+                  garment_counts(obj(w, "Будинок_2").chest)["warm_clothes"] == 2,
               "теплий одяг переїхав разом із мешканцями");
     ctx.check(obj(w, "Склад_1").resources["wood"] == 0, "усі 40 дров пішли на будинок");
     ctx.check(count_kind(w, LogKind::Error) == 0, "немає необроблених винятків");

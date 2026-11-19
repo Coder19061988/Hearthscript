@@ -40,10 +40,13 @@ while True:
         except ToolBrokenError as e:
             notify(f"Зламалася сокира, нарубано {e.done}")
             me.drop(storage)
+            me.dismantle()  # інструменти не ремонтують: руки вже вільні — брухт і дерево на склад
+            me.drop(storage)
             break
         me.drop(storage)
         eat_if_hungry()
 
-    me.put_back(storage)  # і зламану — на склад; завтра візьметься ціла, якщо є
+    if me.tool is not None:
+        me.put_back(storage)
     eat_if_hungry()
     me.sleep(until=time(6, 0))

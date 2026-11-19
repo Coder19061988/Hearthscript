@@ -25,8 +25,10 @@ struct Opts {
     int axes = 1;
     int sickles = 0;
     int scythes = 0;
+    int pickaxes = 0;
     int bread = 10;
     int grain = 0;
+    int flax = 0;
     int wood = 0;
     int trees = 200;
     int start_day = 1;
@@ -42,8 +44,10 @@ Opts mvp_opts() {
     o.axes = 3;  // two woodcutters + a spare: axes wear out and can't be repaired yet
     o.sickles = 2;
     o.scythes = 1;
+    o.pickaxes = 1;
     o.bread = 40;
     o.grain = 30;
+    o.flax = 20;
     o.random_rain = true;
     o.seed = 3;
     return o;
@@ -63,8 +67,10 @@ public:
         scene.axes = o.axes;
         scene.sickles = o.sickles;
         scene.scythes = o.scythes;
+        scene.pickaxes = o.pickaxes;
         scene.bread = o.bread;
         scene.grain = o.grain;
+        scene.flax = o.flax;
         scene.trees = o.trees;
         scene.start_time = (o.start_day - 1) * kDay + o.start_hour * 3600.0;
         build_start_scene(s.world(), scene);
@@ -717,6 +723,13 @@ const TestCase kTests[] = {
     {"board", "дошка оголошень: me.post / me.read", t_board},
     {"tool_wear", "знос інструментів: ToolBrokenError, tools(...), take(інструмент)", t_tool_wear},
     {"animals", "тварини: хлів, сіно, молоко, яйця, забій, зима", t_animals},
+    {"trade", "торгівля: пост, замовлення, купець, управа", t_trade},
+    {"stats", "статистика для діаграм управи: знімок щогодини", t_stats},
+    {"craft", "майстерні й рецепти: кузня, me.craft", t_craft},
+    {"clothes", "ланцюжок одягу: льон, кравецька, знос одягу", t_clothes},
+    {"wood", "ланцюжок дерева: лісопилка, столярня, ліжка", t_wood},
+    {"mining", "камінь і метал: кайло, вуглярня, залізо", t_mining},
+    {"water", "вода: колодязь, полив поля, дощ", t_water},
 };
 
 }  // namespace

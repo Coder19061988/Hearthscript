@@ -46,25 +46,35 @@ public:
 
     // [{id, kind, name, position: Vector2 (meters), ...}] plus, by kind:
     //   storage: resources, tools (whole, by kind), broken_tools; house: firewood, temperature, heated, chest, capacity, residents;
-    //   forest: trees_left, trees_total; field: state, growth, grain_left; board: notes (count);
-    //   barn: capacity, animals (count); meadow: hay, hay_max;
+    //   forest: trees_left, trees_total; deposit: resource, left; field: state, crop, watered, growth, grain_left; board: notes (count);
+    //   barn: capacity, animals (count); meadow: hay, hay_max; town_hall: coins;
+    //   trading_post: for_sale, received ({item: n}), orders ([[item, n]]), merchant_here; workshop: workshop (type);
     //   every building: built, progress (0..1), needs (missing materials), materials_needed
     godot::Array get_buildings() const;
-    // [{id, name, position, alive, hunger, fatigue, health, warmth, tool, tool_condition (%, -1 = none), clothes,
+    // [{id, name, position, alive, hunger, fatigue, health, warmth, tool, tool_condition (%, -1 = none), clothes, clothes_condition,
     //   carrying, home, state,
-    //   state_text, line, line_file ("own" / "shared" / ""), action, action_target, death_cause, death_time (-1 while alive), death_time_text}]
+    //   action_item (craft: what is being made), state_text, line, line_file ("own" / "shared" / ""), action, action_target, death_cause, death_time (-1 while alive), death_time_text}]
     godot::Array get_characters() const;
 
     // Animals (slaughtered ones are gone): [{id, name, species ("cow" / "chicken"), position, home (barn id),
     //   alive, hunger, health, produce (milk / eggs ready)}]
     godot::Array get_animals() const;
+    // The travelling merchant: {here, days_until, arrival_text, post (name while here), prices, offers}
+    // — prices: what he sells, offers: what he pays, coins per unit.
+    godot::Dictionary get_merchant() const;
+    // Charts of the town hall: a sample every game hour. get_stats_size() is cheap — ask for get_stats() only
+    // when it changes. {days (game day as a number, 1.0 = day 1 00:00), coins, people, health, hunger, warmth,
+    //   fatigue, animals: PackedFloat64Array; stock: {resource: PackedFloat64Array} — those ever above 0}
+    int get_stats_size() const;
+    godot::Dictionary get_stats() const;
     // A new animal in a built barn with a free place (for trade); returns "" or why not.
     godot::String add_animal(const godot::String& species, const godot::String& barn);
 
-    // Blueprint placed by the player: kind "house" / "storage" / "field" / "barn" / "board", position in meters.
+    // Blueprint placed by the player: a key of get_build_costs() ("house", "barn", a workshop type...), in meters.
     // Returns "" or the reason why it can't be placed.
     godot::String add_blueprint(const godot::String& kind, const godot::String& name, const godot::Vector2& position);
-    // {"house": {"wood": 40, "hours": 16}, ...}
+    // What can be built, in the order of the "Будувати" menu (workshop types come from the balance):
+    // {"house": {name, prefix (blueprints are named "<prefix>_N"), materials: {"wood": 40}, hours}, ...}
     godot::Dictionary get_build_costs() const;
     // What the character knows about buildings, fields and forests (limited knowledge):
     // [{name, kind, ago}] where ago = game seconds since it saw the object, -1 = never.

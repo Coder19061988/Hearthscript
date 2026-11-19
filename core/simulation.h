@@ -15,8 +15,10 @@ struct StartScene {
     int axes = 1;
     int sickles = 0;
     int scythes = 0;
+    int pickaxes = 0;
     int bread = 10;
     int grain = 0;
+    int flax = 0;  // seed for a flax field
     int trees = 200;
     int warm_clothes = -1;  // in the house chest; -1 = one per character
     double start_time = 5.5 * 3600.0;  // day 1, 05:30 (first day of the warm season)

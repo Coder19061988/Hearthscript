@@ -11,7 +11,7 @@ import inspect as _inspect
 
 _DAY = 86400.0
 _POLL_SECONDS = 60.0
-_RESOURCES = ("wood", "bread", "grain", "flour", "hay", "milk", "eggs", "meat")
+_RESOURCES = ("wood", "bread", "grain", "flour", "hay", "milk", "eggs", "meat", "clothes", "warm_clothes", "scrap", "flax", "cloth", "rags", "planks", "bed", "stone", "ore", "charcoal", "iron", "water")
 
 
 def _is_number(x):
@@ -307,9 +307,11 @@ class Event:
     RAIN_STOPPED = "RAIN_STOPPED"
     TIME = "TIME"            # event.kind for @on(time(22, 0))
     CONDITION = "CONDITION"  # event.kind for @on(lambda: ...)
+    MERCHANT_ARRIVED = "MERCHANT_ARRIVED"
+    MERCHANT_LEFT = "MERCHANT_LEFT"
 
 
-_EVENTS = (Event.RAIN, Event.RAIN_STOPPED)
+_EVENTS = (Event.RAIN, Event.RAIN_STOPPED, Event.MERCHANT_ARRIVED, Event.MERCHANT_LEFT)
 
 
 class Season:
@@ -444,7 +446,12 @@ class Scythe(Tool):
     _kind = "scythe"
 
 
-_TOOLS = {"axe": Axe, "sickle": Sickle, "scythe": Scythe}
+class Pickaxe(Tool):
+    """Кайло: добувати камінь у кар'єрі й руду в рудні (me.mine)."""
+    _kind = "pickaxe"
+
+
+_TOOLS = {"axe": Axe, "sickle": Sickle, "scythe": Scythe, "pickaxe": Pickaxe}
 
 
 def _tool_from(info):
@@ -575,9 +582,63 @@ class House(Building):
     def is_heated(self):
         return _kn.house_info(self._id, "heated")
 
+    @property
+    def beds(self):
+        """Скільки в будинку ліжок; у ліжку сон знімає втому швидше. Ліжка дістаються мешканцям за порядком заселення."""
+        return _kn.house_info(self._id, "beds")
+
     def has(self, item):
         """Чи є в скрині будинку одяг: house.has(WarmClothes)."""
         return _kn.house_chest(self._id, _clothes_kind(item)) > 0
+
+
+class Workshop(Building):
+    """Майстерня: тут виготовляють за рецептами (me.craft). buildings(Workshop) — усі майстерні."""
+    _kind = "workshop"
+
+
+class Smithy(Workshop):
+    """Кузня: me.craft(Axe, кузня) — інструменти з брухту й дров (одне робоче місце — горн)."""
+    _kind = "smithy"
+
+
+class Tailor(Workshop):
+    """Кравецька: льон → тканина (ткацький верстат), тканина → одяг (кравецький стіл)."""
+    _kind = "tailor"
+
+
+class Sawmill(Workshop):
+    """Лісопилка: дрова → дошки (пилорама)."""
+    _kind = "sawmill"
+
+
+class Carpentry(Workshop):
+    """Столярня: дошки + сіно → ліжко (верстак)."""
+    _kind = "carpentry"
+
+
+class Kiln(Workshop):
+    """Вуглярня: дрова → деревне вугілля (вугільна яма)."""
+    _kind = "kiln"
+
+
+class Well(Workshop):
+    """Колодязь: вода (ворот). me.draw_water(well)."""
+    _kind = "well"
+
+
+class TradingPost(Storage):
+    """Торговий пост: amount() і has_tool() — що лишив купець (куплене);
+    for_sale — що чекає на продаж; orders — замовлення на наступний візит."""
+    _kind = "trading_post"
+
+    @property
+    def for_sale(self):
+        return _kn.post_info(self._id, "for_sale")
+
+    @property
+    def orders(self):
+        return _kn.post_info(self._id, "orders")
 
 
 class Forest(GameObject):
@@ -588,6 +649,20 @@ class Forest(GameObject):
         return _kn.forest_trees(self._id)
 
 
+class Deposit(GameObject):
+    """Родовище: кар'єр (камінь, "stone") чи рудня (руда, "ore"). Добувають кайлом: me.mine(...)."""
+    _kind = "deposit"
+
+    @property
+    def resource(self):
+        return _kn.deposit_info(self._id, "resource")
+
+    @property
+    def left(self):
+        """Скільки лишилося — за знанням персонажа (0, якщо ще не бачив)."""
+        return _kn.deposit_info(self._id, "left")
+
+
 class Field(Building):
     _kind = "field"
 
@@ -595,6 +670,16 @@ class Field(Building):
     def state(self):
         """"empty", "sown", "ripe" або "unknown" — якщо персонаж ще не бачив поля."""
         return _kn.field_info(self._id, "state")
+
+    @property
+    def crop(self):
+        """Що посіяно чи дозріло: "grain", "flax" або None."""
+        return _kn.field_info(self._id, "crop")
+
+    @property
+    def is_watered(self):
+        """Чи поле полите (руками чи дощем) — за тим, що персонаж бачив."""
+        return _kn.field_info(self._id, "watered")
 
     @property
     def is_ripe(self):
@@ -607,6 +692,15 @@ class Field(Building):
     @property
     def grain_left(self):
         return _kn.field_info(self._id, "grain_left")
+
+
+class TownHall(Building):
+    """Управа: тут лежать монети поселення (coins — як персонаж бачив востаннє)."""
+    _kind = "town_hall"
+
+    @property
+    def coins(self):
+        return _kn.town_hall_coins(self._id)
 
 
 class Barn(Building):
@@ -700,6 +794,11 @@ class Person(GameObject):
         return _kn.char_stat(self._id, "warmth")
 
     @property
+    def clothes_condition(self):
+        """Стан одягу на персонажі, %; None — без одягу."""
+        return _kn.char_clothes_condition(self._id)
+
+    @property
     def clothes(self):
         kind = _kn.char_clothes(self._id)
         return None if kind is None else _CLOTHES.get(kind)
@@ -720,7 +819,54 @@ class Person(GameObject):
 
 
 _CLASSES = {"storage": Storage, "house": House, "forest": Forest, "field": Field, "person": Person, "board": Board,
-            "barn": Barn, "meadow": Meadow, "cow": Cow, "chicken": Chicken}
+            "barn": Barn, "meadow": Meadow, "cow": Cow, "chicken": Chicken, "town_hall": TownHall,
+            "trading_post": TradingPost, "smithy": Smithy, "tailor": Tailor,
+            "sawmill": Sawmill, "carpentry": Carpentry, "kiln": Kiln, "well": Well, "deposit": Deposit}
+_BUILDING_TYPES = (Storage, House, Forest, Field, Board, Barn, Meadow, TownHall, TradingPost, Workshop, Smithy, Tailor, Sawmill, Carpentry, Kiln,
+                   Well, Deposit)
+
+
+def _item_key(item):
+    """Товар для торгівлі: рядок ресурсу ("grain") або тип (Cow, Axe, WarmClothes)."""
+    if isinstance(item, str):
+        _check_resource(item)
+        return item
+    if isinstance(item, type) and (issubclass(item, Tool) or issubclass(item, Clothes)) and item._kind:
+        return item._kind
+    if item is Cow or item is Chicken:
+        return item._kind
+    raise TypeError(f"товар — це ресурс (\"grain\") або тип (Cow, Axe, WarmClothes), а не {_tname(item)}")
+
+
+class _Merchant:
+    """Мандрівний купець: приїжджає на торговий пост раз на кілька днів і торгує, коли від'їжджає."""
+
+    @property
+    def is_here(self):
+        return _kn.merchant_info("here")
+
+    @property
+    def days_until(self):
+        """За скільки днів приїде (0 — сьогодні або вже тут)."""
+        return _kn.merchant_info("days_until")
+
+    @property
+    def next_visit(self):
+        return Moment(_kn.merchant_info("next_arrival"))
+
+    def price(self, item):
+        """Скільки купець бере за одиницю товару; None — такого не продає."""
+        return _kn.merchant_price(_item_key(item), "price")
+
+    def offer(self, item):
+        """Скільки купець платить за одиницю товару; None — такого не купує."""
+        return _kn.merchant_price(_item_key(item), "offer")
+
+    def __repr__(self):
+        return "merchant(тут)" if self.is_here else f"merchant(через {self.days_until} дн.)"
+
+
+merchant = _Merchant()
 
 
 def _wrap(info):
@@ -734,6 +880,12 @@ def _id_of(obj, cls, action):
     if not isinstance(obj, cls):
         raise TypeError(f"{action}(): очікується {cls.__name__}, а отримано {_tname(obj)}")
     return obj._id
+
+
+def _house_arg(house, action):
+    if not isinstance(house, House):
+        raise TypeError(f"{action}(): очікується House, а отримано {_tname(house)}")
+    return house
 
 
 def _limits(amount, until, hours_):
@@ -780,14 +932,28 @@ class Me(Person):
             raise TypeError("me.take(Axe, склад): вкажіть склад, з якого взяти інструмент")
         return _kn.act("take", _id_of(storage, Storage, "take"), {"tool": _tool_kind(tool)})
 
+    def dismantle(self):
+        """Розібрати інструмент у руках (цілий чи зламаний) на брухт і дерево. Повертає кількість брухту."""
+        return _kn.act("dismantle", -1, None)
+
     def put_back(self, storage):
         return _kn.act("put_back", _id_of(storage, Storage, "put_back"), None)
 
     def chop_wood(self, forest, amount=None, until=None, hours=None):
         return _kn.act("chop_wood", _id_of(forest, Forest, "chop_wood"), _limits(amount, until, hours))
 
-    def drop(self, storage):
-        return _kn.act("drop", _id_of(storage, Storage, "drop"), None)
+    def drop(self, place):
+        """Покласти все, що несе персонаж: на склад, на продаж на торговий пост; у будинок — одяг (у скриню) і ліжка."""
+        if isinstance(place, House):
+            return _kn.act("drop", place._id, None)
+        return _kn.act("drop", _id_of(place, Storage, "drop"), None)
+
+    def order(self, post, item, amount=1):
+        """Залишити на торговому посту замовлення: купець привезе його, коли від'їжджатиме."""
+        pid = _id_of(post, TradingPost, "order")
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+            raise ValueError("order(): amount= має бути додатним цілим числом")
+        return _kn.act("order", pid, {"item": _item_key(item), "count": amount})
 
     def pick_up(self, storage, resource, amount):
         sid = _id_of(storage, Storage, "pick_up")
@@ -843,17 +1009,29 @@ class Me(Person):
         """Переодягтися вдома: me.wear(WarmClothes) / me.wear(Clothes)."""
         return _kn.act("wear", -1, {"item": _clothes_kind(clothes)})
 
-    def sow(self, field, until=None, hours=None):
-        return _kn.act("sow", _id_of(field, Field, "sow"), _limits(None, until, hours))
+    def sow(self, field, crop="grain", until=None, hours=None):
+        """Посіяти поле: зерно ("grain") або льон ("flax"); насіння — з рук."""
+        p = _limits(None, until, hours)
+        p["resource"] = crop
+        return _kn.act("sow", _id_of(field, Field, "sow"), p)
 
     def harvest(self, field, amount=None, until=None, hours=None):
         return _kn.act("harvest", _id_of(field, Field, "harvest"), _limits(amount, until, hours))
 
+    def craft(self, item, at, amount=None, until=None, hours=None):
+        """Виготовити в майстерні `at` предмет за рецептом: ресурс ("flour") чи інструмент (Axe).
+        Матеріали беруться з рук. Повертає, скільки виготовлено."""
+        p = _limits(amount, until, hours)
+        p["item"] = _item_key(item)
+        return _kn.act("craft", _id_of(at, Building, "craft"), p)
+
     def grind(self, house, amount=None, until=None, hours=None):
-        return _kn.act("grind", _id_of(house, House, "grind"), _limits(amount, until, hours))
+        """Змолоти на жорнах зерно, яке несеш, на борошно: те саме, що me.craft("flour", house)."""
+        return self.craft("flour", _house_arg(house, "grind"), amount, until, hours)
 
     def bake(self, house, amount=None, until=None, hours=None):
-        return _kn.act("bake", _id_of(house, House, "bake"), _limits(amount, until, hours))
+        """Спекти хліб із борошна, яке несеш (піч має горіти): те саме, що me.craft("bread", house)."""
+        return self.craft("bread", _house_arg(house, "bake"), amount, until, hours)
 
     def deliver(self, site):
         """Віднести на будову матеріали, яких їй бракує, з тих, що несе персонаж. Повертає кількість."""
@@ -866,6 +1044,19 @@ class Me(Person):
     def move_into(self, house):
         """Переселитися в збудований будинок (з запасним комплектом одягу)."""
         return _kn.act("move_into", _id_of(house, House, "move_into"), None)
+
+    def mine(self, deposit, amount=None, until=None, hours=None):
+        """Добувати кайлом: камінь у кар'єрі, руду в рудні — в руки. Без обмежень — до повних рук."""
+        return _kn.act("mine", _id_of(deposit, Deposit, "mine"), _limits(amount, until, hours))
+
+    def draw_water(self, well, amount=None, until=None, hours=None):
+        """Набрати води в колодязі (відро — 5 хв, 10 кг). Без обмежень — до повних рук. Це me.craft("water", well)."""
+        _id_of(well, Well, "draw_water")  # a clear TypeError for anything but a well
+        return self.craft("water", well, amount, until, hours)
+
+    def water(self, field, until=None, hours=None):
+        """Полити поле: 5 відер води з рук, 30 хв. Полите поле росте швидше протягом доби."""
+        return _kn.act("water", _id_of(field, Field, "water"), _limits(None, until, hours))
 
     def mow(self, meadow, amount=None, until=None, hours=None):
         """Косити луг косою: сіно — в руки. Лише в теплу пору."""
@@ -927,8 +1118,8 @@ def get(name):
 
 def buildings(kind):
     """Список будівель заданого типу: buildings(Storage)."""
-    if kind not in (Storage, House, Forest, Field, Board, Barn, Meadow):
-        raise TypeError("buildings() приймає тип: Storage, House, Forest, Field, Board, Barn або Meadow")
+    if kind not in _BUILDING_TYPES:
+        raise TypeError("buildings() приймає тип будівлі, наприклад Storage, House, Field, Barn, TradingPost")
     return [_wrap(info) for info in _kn.list_objects(kind._kind)]
 
 
@@ -1071,8 +1262,9 @@ __all__ = [
     "world", "Event", "EventInfo", "Season",
     "ActionError", "NoItemError", "ReservedError", "TooHeavyError", "NoHomeError", "NotFoundError",
     "WorkplaceBusyError", "ToolBrokenError", "Building",
-    "Tool", "Axe", "Sickle", "Scythe", "Clothes", "WarmClothes",
+    "Tool", "Axe", "Sickle", "Scythe", "Pickaxe", "Clothes", "WarmClothes", "Deposit",
     "GameObject", "Storage", "House", "Forest", "Field", "Board", "Barn", "Meadow", "Person", "Me", "me",
+    "TownHall", "TradingPost", "merchant", "Workshop", "Smithy", "Tailor", "Sawmill", "Carpentry", "Kiln", "Well",
     "Animal", "Cow", "Chicken",
     "get", "buildings", "animals", "tools", "notify", "on", "off",
 ]

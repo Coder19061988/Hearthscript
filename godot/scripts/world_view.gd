@@ -13,7 +13,17 @@ const HOUSE_SIZE := Vector3(5.0, 3.2, 5.0)
 const STORAGE_SIZE := Vector3(6.0, 4.0, 5.0)
 const BOARD_SIZE := Vector3(3.0, 2.6, 0.5)
 const BARN_SIZE := Vector3(7.0, 3.6, 5.0)
+const TOWN_HALL_SIZE := Vector3(6.0, 4.6, 5.0)
+const WORKSHOP_SIZE := Vector3(5.0, 3.0, 4.5)
+## Walls of every workshop type; a smithy also gets a chimney and an anvil.
+const WORKSHOP_COLORS := {"smithy": Color(0.42, 0.4, 0.4), "tailor": Color(0.75, 0.62, 0.7),
+	"sawmill": Color(0.62, 0.48, 0.3), "carpentry": Color(0.7, 0.55, 0.35), "kiln": Color(0.5, 0.36, 0.3)}
+const CRAFT_SHORT := {"flour": "меле", "bread": "пече", "axe": "кує", "sickle": "кує", "scythe": "кує",
+	"cloth": "тче", "clothes": "шиє", "warm_clothes": "шиє", "planks": "пиляє", "bed": "столярує",
+	"charcoal": "палить", "iron": "плавить", "pickaxe": "кує", "water": "набирає воду"}
+const TRADING_POST_SIZE := Vector3(5.0, 2.6, 3.0)
 const MEADOW_SIZE := 12.0
+const DEPOSIT_SIZE := 6.0  # a quarry or a mine
 ## Animals stand in a row in front of their barn; a slot per animal. Their names are listed on the barn's label.
 const ANIMAL_SPACING := 1.0
 const FOREST_TREES := 70
@@ -21,6 +31,8 @@ const FOREST_CLEARING := 3.0
 const FOREST_RADIUS := 12.0
 ## The observer bumps into a tree this far from its trunk (× tree size): close enough to walk through the forest.
 const TREE_SOLID_RADIUS := 0.5
+const LABEL_PIXEL_SIZE := 0.02
+const FIRST_PERSON_LABEL_PIXEL_SIZE := 0.0005
 const FIELD_SIZE := 9.0
 const FIELD_ROWS := 6
 const FIELD_PLANTS := 8
@@ -35,16 +47,20 @@ const ACTION_SHORT := {
 	"go_to": "іде", "go_home": "іде додому", "take": "бере інструмент", "put_back": "повертає інструмент",
 	"chop_wood": "рубає", "drop": "складає", "pick_up": "бере зі складу", "eat": "їсть",
 	"sleep": "спить", "rest": "відпочиває", "wait": "чекає", "heat": "топить піч",
-	"wear": "переодягається", "sow": "сіє", "harvest": "жне", "grind": "меле", "bake": "пече",
+	"wear": "переодягається", "sow": "сіє", "harvest": "жне", "craft": "працює",
 	"deliver": "несе на будову", "build": "будує", "move_into": "переселяється",
 	"post": "пише на дошці", "read": "читає дошку",
-	"mow": "косить", "feed": "годує", "milk": "доїть", "collect_eggs": "збирає яйця", "slaughter": "забиває",
-}
+	"mine": "добуває", "water": "поливає", "mow": "косить", "feed": "годує", "milk": "доїть", "collect_eggs": "збирає яйця", "slaughter": "забиває",
+	"order": "замовляє", "dismantle": "розбирає"}
 const CARGO_COLORS := {"wood": Color(0.62, 0.42, 0.22), "grain": Color(0.9, 0.78, 0.4),
 	"flour": Color(0.95, 0.93, 0.85), "bread": Color(0.75, 0.5, 0.25), "hay": Color(0.8, 0.75, 0.35),
 	"milk": Color(0.97, 0.97, 0.95), "eggs": Color(0.95, 0.9, 0.78), "meat": Color(0.7, 0.25, 0.22)}
 const RESOURCE_NAMES := {"wood": "дрова", "bread": "хліб", "grain": "зерно", "flour": "борошно",
-	"hay": "сіно", "milk": "молоко", "eggs": "яйця", "meat": "м'ясо"}
+	"hay": "сіно", "milk": "молоко", "eggs": "яйця", "meat": "м'ясо", "clothes": "одяг",
+	"warm_clothes": "теплий одяг", "axe": "сокира", "sickle": "серп", "scythe": "коса", "cow": "корова",
+	"chicken": "курка", "scrap": "брухт", "flax": "льон", "cloth": "тканина", "rags": "ганчір'я",
+	"planks": "дошки", "bed": "ліжко", "pickaxe": "кайло", "stone": "камінь", "ore": "руда",
+	"charcoal": "вугілля", "iron": "залізо", "water": "вода"}
 
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -57,6 +73,7 @@ var _people := {}       # character id -> {root, body, cargo, tool, hat, ring, l
 var _animals := {}      # animal id -> {root, body}
 var _tags: CanvasLayer  # name tags of characters, drawn over the 3D view and under the UI
 var _ghost: MeshInstance3D
+var _first_person := false
 
 
 func _ready() -> void:
@@ -147,6 +164,12 @@ func update_world(buildings: Array, characters: Array, animals: Array, time_of_d
 				var names: Array = in_barn.get(b["id"], [])
 				_set_text(entry["label"], "%s · тварин %d/%d%s" % [b["name"], b["animals"], b["capacity"],
 					"\n" + " · ".join(names) if not names.is_empty() else ""])
+			"town_hall":
+				_set_text(entry["label"], "%s · монет %d" % [b["name"], b["coins"]])
+			"trading_post":
+				_update_trading_post(entry, b)
+			"deposit":
+				_set_text(entry["label"], "%s\n%s: %d" % [b["name"], RESOURCE_NAMES.get(b["resource"], b["resource"]), b["left"]])
 			"meadow":
 				_set_text(entry["label"], "%s\nсіна: %d" % [b["name"], b["hay"]])
 				var grass: MeshInstance3D = entry["grass"]
@@ -175,6 +198,14 @@ func pick_character(camera: Camera3D, screen_pos: Vector2) -> int:
 			best_dist = d
 			best = id
 	return best
+
+
+## First person changes only how building labels are sized (see _size_label).
+func set_first_person(on: bool) -> void:
+	_first_person = on
+	for entry in _buildings.values():
+		if entry.has("label"):
+			_size_label(entry["label"])
 
 
 ## The first-person observer (camera_rig.gd) at `pos` with `radius`: kept on the ground and moved out of walls,
@@ -280,6 +311,45 @@ func _create_building(b: Dictionary, key: String) -> Dictionary:
 		"field":
 			entry["plants"] = _make_field(root, base)
 			entry["label"] = _add_label(root, base + Vector3(-FIELD_SIZE * 0.5 - 2.0, 3.0, 0), b["name"])
+		"town_hall":
+			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, TOWN_HALL_SIZE.y * 0.5, 0), TOWN_HALL_SIZE,
+				Color(0.78, 0.74, 0.66)))
+			_add_box(root, base + BUILDING_OFFSET + Vector3(0, TOWN_HALL_SIZE.y + 0.3, 0),
+				Vector3(TOWN_HALL_SIZE.x + 0.4, 0.6, TOWN_HALL_SIZE.z + 0.4), Color(0.3, 0.32, 0.38))
+			_add_box(root, base + BUILDING_OFFSET + Vector3(2.4, TOWN_HALL_SIZE.y + 1.8, 0), Vector3(0.12, 2.4, 0.12),
+				Color(0.4, 0.3, 0.2))
+			_add_box(root, base + BUILDING_OFFSET + Vector3(2.9, TOWN_HALL_SIZE.y + 2.6, 0), Vector3(0.9, 0.6, 0.05),
+				Color(0.85, 0.25, 0.2))
+			entry["label"] = _add_label(root, base + BUILDING_OFFSET + Vector3(0, TOWN_HALL_SIZE.y + 3.8, 0), b["name"])
+		"workshop":
+			var type: String = b["workshop"]
+			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, WORKSHOP_SIZE.y * 0.5, 0), WORKSHOP_SIZE,
+				WORKSHOP_COLORS.get(type, Color(0.6, 0.55, 0.5))))
+			_add_box(root, base + BUILDING_OFFSET + Vector3(0, WORKSHOP_SIZE.y + 0.25, 0),
+				Vector3(WORKSHOP_SIZE.x + 0.4, 0.5, WORKSHOP_SIZE.z + 0.4), Color(0.28, 0.26, 0.26))
+			if type == "smithy" or type == "kiln":
+				_add_box(root, base + BUILDING_OFFSET + Vector3(-1.6, WORKSHOP_SIZE.y + 1.2, 1.2), Vector3(0.8, 2.0, 0.8),
+					Color(0.3, 0.3, 0.3))
+			if type == "smithy":
+				_add_box(root, base + BUILDING_OFFSET + Vector3(0, 0.5, WORKSHOP_SIZE.z * 0.5 + 0.6), Vector3(0.9, 1.0, 0.6),
+					Color(0.2, 0.2, 0.22))  # the anvil at the door
+			entry["label"] = _add_label(root, base + BUILDING_OFFSET + Vector3(0, WORKSHOP_SIZE.y + 3.0, 0), b["name"])
+		"trading_post":
+			var timber := Color(0.55, 0.38, 0.22)
+			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, 0.5, 0),
+				Vector3(TRADING_POST_SIZE.x, 1.0, TRADING_POST_SIZE.z), timber))
+			for x in [-2.3, 2.3]:
+				_add_box(root, base + BUILDING_OFFSET + Vector3(x, 1.3, -1.3), Vector3(0.2, 2.6, 0.2), timber)
+			_add_box(root, base + BUILDING_OFFSET + Vector3(0, 2.7, -0.4), Vector3(TRADING_POST_SIZE.x + 0.6, 0.15, 2.6),
+				Color(0.85, 0.75, 0.4))
+			# The merchant's cart: shown while he stands at the post.
+			var cart := Node3D.new()
+			root.add_child(cart)
+			_add_box(cart, base + BUILDING_OFFSET + Vector3(0, 0.9, 3.2), Vector3(3.2, 0.9, 1.8), Color(0.45, 0.3, 0.18))
+			_add_box(cart, base + BUILDING_OFFSET + Vector3(0, 1.7, 3.2), Vector3(3.0, 0.8, 1.7), Color(0.92, 0.9, 0.82))
+			cart.visible = false
+			entry["cart"] = cart
+			entry["label"] = _add_label(root, base + BUILDING_OFFSET + Vector3(0, 4.2, 0), b["name"])
 		"barn":
 			_block(entry, _add_box(root, base + BUILDING_OFFSET + Vector3(0, BARN_SIZE.y * 0.5, 0), BARN_SIZE,
 				Color(0.55, 0.22, 0.17)))
@@ -291,6 +361,14 @@ func _create_building(b: Dictionary, key: String) -> Dictionary:
 			roof.position = base + BUILDING_OFFSET + Vector3(0, BARN_SIZE.y + 1.0, 0)
 			root.add_child(roof)
 			entry["label"] = _add_label(root, base + BUILDING_OFFSET + Vector3(0, BARN_SIZE.y + 3.2, 0), b["name"])
+		"deposit":
+			# A pit with rocks: grey stone or rusty ore.
+			var rock := Color(0.58, 0.57, 0.55) if b["resource"] == "stone" else Color(0.52, 0.32, 0.22)
+			_add_box(root, base + Vector3(0, 0.02, 0), Vector3(DEPOSIT_SIZE, 0.04, DEPOSIT_SIZE), Color(0.5, 0.45, 0.38))
+			for r in [[-1.6, -1.0, 1.6, 1.2], [1.4, -0.6, 1.2, 0.9], [0.0, 1.5, 1.8, 1.5], [-0.8, 0.6, 0.9, 0.7],
+					[1.7, 1.6, 0.8, 0.6]]:
+				_block(entry, _add_box(root, base + Vector3(r[0], r[3] * 0.5, r[1]), Vector3(r[2], r[3], r[2] * 0.8), rock))
+			entry["label"] = _add_label(root, base + Vector3(-DEPOSIT_SIZE * 0.5 - 2.0, 3.0, 0), b["name"])
 		"meadow":
 			_add_box(root, base + Vector3(0, 0.02, 0), Vector3(MEADOW_SIZE, 0.04, MEADOW_SIZE), Color(0.5, 0.68, 0.3))
 			entry["grass"] = _add_box(root, base + Vector3(0, 0.3, 0), Vector3(MEADOW_SIZE * 0.9, 0.6, MEADOW_SIZE * 0.9),
@@ -306,6 +384,29 @@ func _create_building(b: Dictionary, key: String) -> Dictionary:
 				Color(0.95, 0.93, 0.85))
 			entry["label"] = _add_label(root, base + BUILDING_OFFSET + Vector3(0, 4.0, 0), b["name"])
 	return entry
+
+
+## A trading post: what waits for the merchant, what he left, the orders; his cart while he is here.
+func _update_trading_post(entry: Dictionary, b: Dictionary) -> void:
+	var lines := [b["name"] + (" · купець тут" if b["merchant_here"] else "")]
+	if not (b["for_sale"] as Dictionary).is_empty():
+		lines.append("на продаж: " + _goods_text(b["for_sale"]))
+	if not (b["received"] as Dictionary).is_empty():
+		lines.append("куплене: " + _goods_text(b["received"]))
+	var orders := []
+	for o in b["orders"]:
+		orders.append("%s ×%d" % [RESOURCE_NAMES.get(o[0], o[0]), o[1]])
+	if not orders.is_empty():
+		lines.append("замовлено: " + ", ".join(orders))
+	_set_text(entry["label"], "\n".join(lines))
+	entry["cart"].visible = b["merchant_here"]
+
+
+func _goods_text(goods: Dictionary) -> String:
+	var parts := []
+	for item in goods:
+		parts.append("%s %d" % [RESOURCE_NAMES.get(item, item), goods[item]])
+	return " · ".join(parts)
 
 
 func _update_blueprint(entry: Dictionary, b: Dictionary) -> void:
@@ -332,15 +433,19 @@ func _update_storage(entry: Dictionary, b: Dictionary) -> void:
 	var tools: Dictionary = b["tools"]
 	var wood: int = res.get("wood", 0)
 	var broken: Dictionary = b["broken_tools"]
-	var broken_count: int = broken.get("axe", 0) + broken.get("sickle", 0) + broken.get("scythe", 0)
+	var broken_count := 0
+	for kind in broken:
+		broken_count += broken[kind]
 	var farm := []  # products of the meadow and the barn, when there are any
-	for r in ["hay", "milk", "eggs", "meat"]:
+	for r in ["hay", "milk", "eggs", "meat", "scrap", "flax", "cloth", "rags", "planks", "bed", "stone", "ore", "charcoal",
+			"iron"]:
 		if res.get(r, 0) > 0:
 			farm.append("%s %d" % [RESOURCE_NAMES[r], res[r]])
-	_set_text(entry["label"], "%s\nдрова %d · хліб %d · зерно %d · борошно %d%s\nсокир %d · серпів %d · кіс %d%s" % [
+	_set_text(entry["label"], "%s\nдрова %d · хліб %d · зерно %d · борошно %d%s\nсокир %d · серпів %d · кіс %d%s%s" % [
 		b["name"], wood, res.get("bread", 0), res.get("grain", 0), res.get("flour", 0),
 		"\n" + " · ".join(farm) if not farm.is_empty() else "",
 		tools.get("axe", 0), tools.get("sickle", 0), tools.get("scythe", 0),
+		" · кайл %d" % tools["pickaxe"] if tools.get("pickaxe", 0) > 0 else "",
 		" · зламаних %d" % broken_count if broken_count > 0 else ""])
 	var pile: MeshInstance3D = entry["pile"]
 	pile.visible = wood > 0
@@ -352,8 +457,9 @@ func _update_house(entry: Dictionary, b: Dictionary) -> void:
 	var heated: bool = b["heated"]
 	var state := "у печі %.1f дров" % b["firewood"] if heated else "піч холодна"
 	var residents: Array = b["residents"]
-	_set_text(entry["label"], "%s · мешканців %d/%d\n%+.0f°C · %s" % [
-		b["name"], residents.size(), b["capacity"], b["temperature"], state])
+	var beds: int = b["beds"]
+	_set_text(entry["label"], "%s · мешканців %d/%d%s\n%+.0f°C · %s" % [
+		b["name"], residents.size(), b["capacity"], " · ліжок %d" % beds if beds > 0 else "", b["temperature"], state])
 	entry["smoke"].emitting = heated
 
 
@@ -364,19 +470,23 @@ func _update_field(entry: Dictionary, b: Dictionary) -> void:
 		"empty":
 			_set_text(entry["label"], "%s\nпорожнє" % b["name"])
 		"sown":
-			_set_text(entry["label"], "%s\nросте: %d%%" % [b["name"], int(growth * 100.0)])
+			_set_text(entry["label"], "%s\n%s росте: %d%%%s" % [b["name"], RESOURCE_NAMES.get(b["crop"], b["crop"]),
+				int(growth * 100.0), " · полите" if b["watered"] else ""])
 		"ripe":
-			_set_text(entry["label"], "%s\nстигле: %d зерна" % [b["name"], b["grain_left"]])
+			_set_text(entry["label"], "%s\nстигле: %s %d" % [b["name"], RESOURCE_NAMES.get(b["crop"], b["crop"]),
+				b["grain_left"]])
 	var plants: Array = entry["plants"]
 	var standing := plants.size()
 	if state == "ripe":
-		standing = int(ceil(plants.size() * float(b["grain_left"]) / 80.0))
+		standing = int(ceil(plants.size() * float(b["grain_left"]) / (40.0 if b["crop"] == "flax" else 80.0)))
 	var height := 0.0
 	if state == "sown":
 		height = lerpf(0.15, 1.2, growth)
 	elif state == "ripe":
 		height = 1.3
-	var color := Color(0.85, 0.72, 0.3) if state == "ripe" else Color(0.35, 0.65, 0.25)
+	var color := Color(0.35, 0.65, 0.25)
+	if state == "ripe":
+		color = Color(0.45, 0.55, 0.85) if b["crop"] == "flax" else Color(0.85, 0.72, 0.3)  # flax flowers blue
 	for i in plants.size():
 		var plant: MeshInstance3D = plants[i]
 		plant.visible = height > 0.0 and i < standing
@@ -395,8 +505,16 @@ func _footprint(kind: String) -> Vector3:
 			return BOARD_SIZE
 		"barn":
 			return BARN_SIZE
-		_:
+		"town_hall":
+			return TOWN_HALL_SIZE
+		"field":
 			return Vector3(FIELD_SIZE, 0.2, FIELD_SIZE)
+		"trading_post":
+			return TRADING_POST_SIZE
+		"deposit":
+			return Vector3(DEPOSIT_SIZE, 1.5, DEPOSIT_SIZE)
+		_:
+			return WORKSHOP_SIZE  # any workshop type
 
 
 func _offset(kind: String) -> Vector3:
@@ -501,6 +619,8 @@ func _animal_lines(animals: Array) -> Dictionary:
 
 func _status_text(c: Dictionary) -> String:
 	var action: String = c["action"]
+	if action == "craft":
+		return CRAFT_SHORT.get(c["action_item"], "працює")
 	if action != "":
 		return ACTION_SHORT.get(action, action)
 	match c["state"]:
@@ -745,12 +865,19 @@ func _add_label(parent: Node3D, pos: Vector3, text: String) -> Label3D:
 	label.text = text
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.font_size = 64
-	label.pixel_size = 0.02
+	_size_label(label)
 	label.outline_size = 14
 	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.85)
 	label.no_depth_test = true
 	parent.add_child(label)
 	return label
+
+
+## Overview: labels are sized in the world, for a look from ~100 units. First person: the same size on screen at
+## any distance (~18 px a line in a 900 px high window), otherwise a near label would cover half the view.
+func _size_label(label: Label3D) -> void:
+	label.fixed_size = _first_person
+	label.pixel_size = FIRST_PERSON_LABEL_PIXEL_SIZE if _first_person else LABEL_PIXEL_SIZE
 
 
 func _set_text(label: Label3D, text: String) -> void:

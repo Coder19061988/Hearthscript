@@ -16,6 +16,9 @@ const RUN_FACTOR := 3.0
 ## A fast step is split into parts no longer than this, so it cannot jump through a thin wall.
 const MAX_STEP := 0.3
 const LOOK_SENSITIVITY := 0.15
+## Capturing the mouse moves the cursor to the window center, and the jump arrives as mouse motion:
+## motion during these first frames must not turn the view.
+const CAPTURE_SETTLE_FRAMES := 3
 ## Entering first person, the observer stands this far before the point the overview looked at, facing it;
 ## leaving, the overview looks at the point this far ahead of the observer.
 const STEP_BACK := 10.0
@@ -28,6 +31,7 @@ var obstacles: Callable
 var _yaw := 90.0
 var _pitch := -50.0
 var _overview_pitch := -50.0
+var _captured_frame := -CAPTURE_SETTLE_FRAMES
 var _distance := 105.0
 var _rotating := false
 var _panning := false
@@ -56,6 +60,7 @@ func set_first_person(on: bool) -> void:
 		position = _walkable(position - forward * STEP_BACK)
 		camera.fov = FIRST_PERSON_FOV
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		_captured_frame = Engine.get_process_frames()
 	else:
 		_pitch = _overview_pitch
 		position = Vector3(position.x, 0.0, position.z) + forward * STEP_BACK
@@ -127,7 +132,8 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if first_person:
-		if event is InputEventMouseMotion:
+		var settled := Engine.get_process_frames() - _captured_frame >= CAPTURE_SETTLE_FRAMES
+		if event is InputEventMouseMotion and settled:
 			_yaw -= event.relative.x * LOOK_SENSITIVITY
 			_pitch = clampf(_pitch - event.relative.y * LOOK_SENSITIVITY, -85.0, 85.0)
 			_apply()

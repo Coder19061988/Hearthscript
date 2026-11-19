@@ -7,7 +7,7 @@ const CameraRig := preload("res://scripts/camera_rig.gd")
 const GameUI := preload("res://scripts/game_ui.gd")
 
 ## Start of the MVP game: 4 adults (MVP.md §3). proto/tests.cpp (mvp_opts) checks the same numbers.
-const START_OPTIONS := {"characters": 4, "axes": 3, "sickles": 2, "scythes": 1, "bread": 40, "grain": 30, "trees": 200,
+const START_OPTIONS := {"characters": 4, "axes": 3, "sickles": 2, "scythes": 1, "pickaxes": 1, "bread": 40, "grain": 30, "flax": 20, "trees": 200,
 	"random_rain": true, "seed": 3}
 const BALANCE_PATH := "res://data/balance.json"
 ## Shared code of a new game (scripts/start_shared.py): settlers only eat and sleep; the player writes the rest.
@@ -15,7 +15,6 @@ const START_SHARED_CODE_PATH := "res://data/shared.py"
 const FALLBACK_SHARED_CODE := "def main():\n    while True:\n        me.sleep(until=time(6, 0))\n"
 ## A frame never advances more than this much real time (a hitch must not skip hours of game time).
 const MAX_FRAME_SECONDS := 0.25
-const BUILD_PREFIX := {"house": "Будинок", "storage": "Склад", "field": "Поле", "barn": "Хлів", "board": "Дошка"}
 ## Keep in sync with blueprint_min_distance in config/balance.json (the core makes the final check).
 const BLUEPRINT_MIN_DISTANCE := 25.0
 const FOREST_RADIUS_M := 60.0
@@ -154,6 +153,10 @@ func _process(delta: float) -> void:
 		selected_id, camera_rig.camera)
 	ui.update_status(sim.get_time_text(), sim.is_raining(), sim.is_night(), winter, sim.get_season_days_left(),
 		sim.get_temperature(), buildings)
+	ui.update_trade(sim.get_merchant(), buildings)
+	var samples: int = sim.get_stats_size()
+	if ui.wants_stats(samples):
+		ui.update_stats(sim.get_stats())
 	ui.update_character(_find_character(characters, selected_id),
 		sim.get_knowledge(selected_id) if selected_id >= 0 else [])
 	ui.set_globals(sim.get_globals())
@@ -226,6 +229,7 @@ func _set_first_person(on: bool) -> void:
 		_stop_placing()
 		get_viewport().gui_release_focus()  # WASD must walk, not type into the code editor
 	camera_rig.set_first_person(on)
+	world_view.set_first_person(on)
 	ui.set_first_person(on)
 
 
@@ -264,7 +268,7 @@ func _find_character(characters: Array, id: int) -> Dictionary:
 func _start_placing(kind: String) -> void:
 	placing_kind = kind
 	naming = false
-	ui.set_hint("Клацніть на карті, де поставити креслення «%s». ПКМ або Esc — скасувати." % BUILD_PREFIX[kind])
+	ui.set_hint("Клацніть на карті, де поставити креслення «%s». ПКМ або Esc — скасувати." % ui.build_name(kind))
 
 
 func _stop_placing() -> void:
@@ -318,9 +322,9 @@ func _suggest_name(kind: String) -> String:
 	for b in sim.get_buildings():
 		taken[b["name"]] = true
 	var n := 1
-	while taken.has("%s_%d" % [BUILD_PREFIX[kind], n]):
+	while taken.has("%s_%d" % [ui.build_prefix(kind), n]):
 		n += 1
-	return "%s_%d" % [BUILD_PREFIX[kind], n]
+	return "%s_%d" % [ui.build_prefix(kind), n]
 
 
 # ---------------------------------------------------------------- global variables

@@ -16,7 +16,8 @@ constexpr size_t kSavedLogEntries = 500;
 
 ObjKind kind_from(const std::string& s) {
     for (ObjKind k : {ObjKind::Storage, ObjKind::House, ObjKind::Forest, ObjKind::Field, ObjKind::Person, ObjKind::Board,
-                      ObjKind::Barn, ObjKind::Meadow, ObjKind::Animal})
+                      ObjKind::Barn, ObjKind::Meadow, ObjKind::Animal, ObjKind::TownHall, ObjKind::TradingPost,
+                      ObjKind::Workshop, ObjKind::Deposit})
         if (s == kind_name(k)) return k;
     throw std::runtime_error("невідомий тип об'єкта " + s);
 }
@@ -59,10 +60,37 @@ ToolItem tool_from_json(const json& j) {
     t.kind = j.at("kind").get<std::string>();
     t.quality = j.at("quality").get<int>();
     t.condition = j.at("condition").get<double>();
-    if (t.kind != "axe" && t.kind != "sickle" && t.kind != "scythe") throw std::runtime_error("невідомий інструмент " + t.kind);
+    if (t.kind != "axe" && t.kind != "sickle" && t.kind != "scythe" && t.kind != "pickaxe") throw std::runtime_error("невідомий інструмент " + t.kind);
     if (t.quality < 1 || t.quality > 5 || t.condition < 0 || t.condition > 100)
         throw std::runtime_error("неможливий стан інструмента");
     return t;
+}
+
+// A garment: null when there is none.
+json garment_to_json(const Garment& g) {
+    if (g.empty()) return nullptr;
+    return {{"kind", g.kind}, {"condition", g.condition}};
+}
+
+Garment garment_from_json(const json& j) {
+    Garment g;
+    if (j.is_null()) return g;
+    g.kind = j.at("kind").get<std::string>();
+    g.condition = j.at("condition").get<double>();
+    if (g.kind != "clothes" && g.kind != "warm_clothes") throw std::runtime_error("невідомий одяг " + g.kind);
+    return g;
+}
+
+json garments_to_json(const std::vector<Garment>& garments) {
+    json list = json::array();
+    for (const Garment& g : garments) list.push_back(garment_to_json(g));
+    return list;
+}
+
+std::vector<Garment> garments_from_json(const json& j) {
+    std::vector<Garment> garments;
+    for (const auto& gj : j) garments.push_back(garment_from_json(gj));
+    return garments;
 }
 
 json tools_to_json(const std::vector<ToolItem>& tools) {
@@ -83,7 +111,7 @@ json object_to_json(const Object& o) {
     return {
         {"id", o.id}, {"kind", kind_name(o.kind)}, {"name", o.name}, {"x", o.pos.x}, {"y", o.pos.y},
         {"resources", counts(o.resources)}, {"tools", tools_to_json(o.tools)},
-        {"firewood", o.firewood}, {"temperature", o.temperature}, {"chest", counts(o.chest)},
+        {"firewood", o.firewood}, {"temperature", o.temperature}, {"chest", garments_to_json(o.chest)}, {"beds", o.beds},
         {"trees_total", o.trees_total}, {"wood_taken", o.wood_taken},
         {"field_state", field_state_name(o.field_state)}, {"seeded", o.seeded}, {"sow_done", o.sow_done},
         {"growth", o.growth}, {"grain_left", o.grain_left},
@@ -93,6 +121,8 @@ json object_to_json(const Object& o) {
         {"species", o.species}, {"home", o.home}, {"hunger", o.hunger}, {"health", o.health}, {"alive", o.alive},
         {"removed", o.removed}, {"produce", o.produce}, {"hunger_warned", o.hunger_warned},
         {"death_cause", o.death_cause}, {"hay", o.hay},
+        {"coins", o.coins}, {"for_sale", counts(o.for_sale)}, {"sale_tools", tools_to_json(o.sale_tools)},
+        {"orders", o.orders}, {"workshop", o.workshop}, {"crop", o.crop}, {"watered_until", o.watered_until}, {"deposit", o.deposit}, {"deposit_left", o.deposit_left},
     };
 }
 
@@ -106,7 +136,8 @@ Object object_from_json(const json& oj) {
     o.tools = tools_from_json(oj.at("tools"));
     o.firewood = oj.at("firewood").get<double>();
     o.temperature = oj.at("temperature").get<double>();
-    o.chest = counts_from(oj.at("chest"));
+    o.chest = garments_from_json(oj.at("chest"));
+    o.beds = oj.at("beds").get<int>();
     o.trees_total = oj.at("trees_total").get<int>();
     o.wood_taken = oj.at("wood_taken").get<int>();
     o.field_state = field_state_from(oj.at("field_state").get<std::string>());
@@ -130,6 +161,15 @@ Object object_from_json(const json& oj) {
     o.hunger_warned = oj.at("hunger_warned").get<bool>();
     o.death_cause = oj.at("death_cause").get<std::string>();
     o.hay = oj.at("hay").get<double>();
+    o.coins = oj.at("coins").get<int>();
+    o.for_sale = counts_from(oj.at("for_sale"));
+    o.sale_tools = tools_from_json(oj.at("sale_tools"));
+    o.orders = oj.at("orders").get<std::vector<std::pair<std::string, int>>>();
+    o.workshop = oj.at("workshop").get<std::string>();
+    o.crop = oj.at("crop").get<std::string>();
+    o.watered_until = oj.at("watered_until").get<double>();
+    o.deposit = oj.at("deposit").get<std::string>();
+    o.deposit_left = oj.at("deposit_left").get<int>();
     return o;
 }
 
@@ -138,7 +178,7 @@ json knowledge_to_json(const Knowledge& k) {
     if (k.state.kind == ObjKind::Person) {
         const PersonView& p = k.person;
         j["person"] = {{"hunger", p.hunger}, {"fatigue", p.fatigue}, {"health", p.health}, {"warmth", p.warmth},
-                       {"alive", p.alive}, {"tool", tool_to_json(p.tool)}, {"clothes", p.clothes}, {"carrying", counts(p.carrying)}};
+                       {"alive", p.alive}, {"tool", tool_to_json(p.tool)}, {"clothes", garment_to_json(p.clothes)}, {"carrying", counts(p.carrying)}};
     }
     return j;
 }
@@ -160,7 +200,7 @@ Knowledge knowledge_from_json(const json& j, const std::vector<Object>& objects)
         k.person.warmth = p.at("warmth").get<double>();
         k.person.alive = p.at("alive").get<bool>();
         k.person.tool = tool_from_json(p.at("tool"));
-        k.person.clothes = p.at("clothes").get<std::string>();
+        k.person.clothes = garment_from_json(p.at("clothes"));
         k.person.carrying = counts_from(p.at("carrying"));
     }
     return k;
@@ -184,6 +224,12 @@ struct SaveAccess {
         j["rain"] = rain;
         j["winters_survived"] = w.winters_survived_;
         j["next_tool_id"] = w.next_tool_id_;
+        std::ostringstream trade_rng;
+        trade_rng << w.trade_rng_;
+        j["merchant"] = {{"next_arrival", w.merchant_.next_arrival}, {"leaves", w.merchant_.leaves},
+                         {"here", w.merchant_.here}, {"post", w.merchant_.post},
+                         {"prices", counts(w.merchant_.prices)}, {"offers", counts(w.merchant_.offers)},
+                         {"rng", trade_rng.str()}};
 
         json globals = json::object();
         for (const auto& [name, value] : w.globals_) std::visit([&](const auto& v) { globals[name] = v; }, value);
@@ -201,6 +247,13 @@ struct SaveAccess {
         }
         j["boards"] = boards;
 
+        json stats = json::array();
+        for (const StatSample& st : w.stats_)
+            stats.push_back({{"time", st.time}, {"stock", counts(st.stock)}, {"coins", st.coins}, {"people", st.people},
+                             {"health", st.health}, {"hunger", st.hunger}, {"warmth", st.warmth},
+                             {"fatigue", st.fatigue}, {"animals", st.animals}});
+        j["stats"] = stats;
+
         json characters = json::array();
         for (const Character& c : w.chars_) {
             json partial = json::object();
@@ -211,7 +264,7 @@ struct SaveAccess {
                 {"known", known},
                 {"obj", c.obj}, {"name", c.name}, {"hunger", c.hunger}, {"fatigue", c.fatigue},
                 {"health", c.health}, {"warmth", c.warmth}, {"alive", c.alive}, {"tool", tool_to_json(c.tool)},
-                {"clothes", c.clothes}, {"carrying", counts(c.carrying)}, {"home", c.home},
+                {"clothes", garment_to_json(c.clothes)}, {"carrying", counts(c.carrying)}, {"home", c.home},
                 {"last_action_time", c.last_action_time}, {"work_partial", partial},
                 {"idle_warned", c.idle_warned}, {"hunger_warned", c.hunger_warned},
                 {"fatigue_warned", c.fatigue_warned}, {"cold_warned", c.cold_warned},
@@ -245,6 +298,16 @@ struct SaveAccess {
         for (const auto& r : j.at("rain")) w.rain_.push_back({r.at(0).get<double>(), r.at(1).get<double>()});
         w.winters_survived_ = j.at("winters_survived").get<int>();
         w.next_tool_id_ = j.at("next_tool_id").get<int>();
+        const json& m = j.at("merchant");
+        w.merchant_.next_arrival = m.at("next_arrival").get<double>();
+        w.merchant_.leaves = m.at("leaves").get<double>();
+        w.merchant_.here = m.at("here").get<bool>();
+        w.merchant_.post = m.at("post").get<int>();
+        w.merchant_.prices = counts_from(m.at("prices"));
+        w.merchant_.offers = counts_from(m.at("offers"));
+        std::istringstream trade_rng(m.at("rng").get<std::string>());
+        trade_rng >> w.trade_rng_;
+        if (!trade_rng) throw std::runtime_error("пошкоджений стан генератора цін");
 
         w.globals_.clear();
         for (const auto& [name, v] : j.at("globals").items()) {
@@ -282,7 +345,7 @@ struct SaveAccess {
             c.warmth = cj.at("warmth").get<double>();
             c.alive = cj.at("alive").get<bool>();
             c.tool = tool_from_json(cj.at("tool"));
-            c.clothes = cj.at("clothes").get<std::string>();
+            c.clothes = garment_from_json(cj.at("clothes"));
             c.carrying = counts_from(cj.at("carrying"));
             c.home = cj.at("home").get<int>();
             if (c.home >= static_cast<int>(w.objects_.size()) || (c.home >= 0 && w.objects_[c.home].kind != ObjKind::House))
@@ -309,6 +372,20 @@ struct SaveAccess {
                 Knowledge k = knowledge_from_json(kj, w.objects_);
                 c.known[k.state.id] = k;
             }
+        }
+        w.stats_.clear();
+        for (const auto& sj : j.at("stats")) {
+            StatSample st;
+            st.time = sj.at("time").get<double>();
+            st.stock = counts_from(sj.at("stock"));
+            st.coins = sj.at("coins").get<int>();
+            st.people = sj.at("people").get<int>();
+            st.health = sj.at("health").get<double>();
+            st.hunger = sj.at("hunger").get<double>();
+            st.warmth = sj.at("warmth").get<double>();
+            st.fatigue = sj.at("fatigue").get<double>();
+            st.animals = sj.at("animals").get<int>();
+            w.stats_.push_back(st);
         }
         w.boards_.clear();
         for (const auto& bj : j.at("boards")) {

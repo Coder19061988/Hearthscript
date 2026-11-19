@@ -17,6 +17,12 @@
   "tool_take_minutes": 1,
   "tool_wear_per_hour": 2.5,
   "tool_worn_warning": 25,
+  "dismantle_minutes": 10,
+  "axe_scrap": 2,
+  "scythe_scrap": 2,
+  "sickle_scrap": 1,
+  "dismantle_wood": 1,
+  "scrap_kg": 1,
   "transfer_base_minutes": 1,
   "transfer_per_unit_minutes": 0.2,
   "chop_minutes_per_unit": 20,
@@ -81,8 +87,6 @@
   "field_grow_days": 4,
   "field_yield_grain": 80,
   "field_harvest_hours": 6,
-  "grind_minutes_per_unit": 3,
-  "bake_minutes_per_unit": 5,
   "grain_kg": 0.5,
   "flour_kg": 0.5,
 
@@ -125,9 +129,115 @@
   "milk_hunger_relief": 15,
   "eggs_hunger_relief": 10,
 
+  "start_coins": 50,
+  "merchant_first_day": 5,
+  "merchant_interval_days": 5,
+  "merchant_arrive_hour": 8,
+  "merchant_leave_hour": 20,
+  "merchant_price_spread": 0.25,
+  "merchant_offer_share": 0.5,
+  "trading_post_build_wood": 20,
+  "trading_post_build_hours": 6,
+  "order_minutes": 2,
+  "clothes_kg": 2,
+  "value_wood": 4,
+  "value_grain": 6,
+  "value_flour": 8,
+  "value_bread": 10,
+  "value_hay": 3,
+  "value_milk": 6,
+  "value_eggs": 3,
+  "value_meat": 12,
+  "value_clothes": 30,
+  "value_warm_clothes": 60,
+  "value_axe": 50,
+  "value_sickle": 40,
+  "value_scythe": 50,
+  "value_chicken": 25,
+  "value_cow": 200,
+  "value_scrap": 8,
+
+  "flax_seed": 10,
+  "flax_yield": 40,
+  "flax_kg": 0.5,
+  "cloth_kg": 1,
+  "rags_kg": 0.5,
+  "clothes_wear_per_day": 5,
+  "warm_clothes_wear_per_day": 7,
+  "clothes_worn_warning": 25,
+  "value_flax": 3,
+  "value_cloth": 10,
+  "value_rags": 1,
+
+  "planks_kg": 4,
+  "bed_kg": 20,
+  "fatigue_sleep_bed_per_hour": -16,
+  "value_planks": 4,
+  "value_bed": 30,
+
+  "quarry_stone": 400,
+  "mine_ore": 150,
+  "mine_stone_minutes": 15,
+  "mine_ore_minutes": 30,
+  "stone_kg": 10,
+  "ore_kg": 8,
+  "charcoal_kg": 2,
+  "iron_kg": 5,
+  "pickaxe_scrap": 2,
+  "value_stone": 2,
+  "value_ore": 4,
+  "value_charcoal": 3,
+  "value_iron": 12,
+  "value_pickaxe": 45,
+
+  "water_kg": 10,
+  "field_water_units": 5,
+  "field_water_minutes": 30,
+  "field_water_days": 1,
+  "field_water_growth_bonus": 0.5,
+  "field_rain_soak_hours": 6,
+
   "board_build_wood": 5,
   "board_build_hours": 1,
   "board_post_minutes_per_note": 1,
   "board_read_base_minutes": 1,
-  "board_read_per_note_minutes": 0.2
+  "board_read_per_note_minutes": 0.2,
+
+  "workshops": {
+    "smithy": {"name": "Кузня", "materials": {"wood": 40}, "hours": 12},
+    "tailor": {"name": "Кравецька", "materials": {"wood": 30}, "hours": 8},
+    "sawmill": {"name": "Лісопилка", "materials": {"wood": 30}, "hours": 10},
+    "carpentry": {"name": "Столярня", "materials": {"wood": 10, "planks": 20}, "hours": 8},
+    "kiln": {"name": "Вуглярня", "materials": {"stone": 20, "wood": 10}, "hours": 8},
+    "well": {"name": "Колодязь", "materials": {"stone": 15, "wood": 5}, "hours": 6}
+  },
+
+  "recipes": {
+    "planks": {"at": "sawmill", "workplace": "saw", "inputs": {"wood": 1}, "minutes": 20, "heavy": true},
+    "bed": {"at": "carpentry", "workplace": "bench", "inputs": {"planks": 4, "hay": 3}, "minutes": 180},
+    "cloth": {"at": "tailor", "workplace": "loom", "inputs": {"flax": 2}, "minutes": 60},
+    "clothes": {"at": "tailor", "workplace": "table", "inputs": {"cloth": 3}, "minutes": 120},
+    "warm_clothes": {"at": "tailor", "workplace": "table", "inputs": {"cloth": 5}, "minutes": 180},
+    "flour": {"at": "house", "workplace": "mill", "inputs": {"grain": 1}, "minutes": 3, "heavy": true},
+    "bread": {"at": "house", "workplace": "oven", "inputs": {"flour": 1}, "minutes": 5, "fire": true},
+    "water": {"at": "well", "workplace": "windlass", "inputs": {}, "minutes": 5},
+    "charcoal": {"at": "kiln", "workplace": "pit", "inputs": {"wood": 3}, "minutes": 120},
+    "iron": {"at": "smithy", "workplace": "forge", "inputs": {"ore": 2, "charcoal": 1}, "minutes": 60, "heavy": true},
+    "axe": [
+      {"at": "smithy", "workplace": "forge", "inputs": {"scrap": 2, "wood": 2}, "minutes": 120, "heavy": true},
+      {"at": "smithy", "workplace": "forge", "inputs": {"iron": 2, "wood": 2}, "minutes": 120, "heavy": true}
+    ],
+    "sickle": [
+      {"at": "smithy", "workplace": "forge", "inputs": {"scrap": 1, "wood": 1}, "minutes": 90, "heavy": true},
+      {"at": "smithy", "workplace": "forge", "inputs": {"iron": 1, "wood": 1}, "minutes": 90, "heavy": true}
+    ],
+    "scythe": [
+      {"at": "smithy", "workplace": "forge", "inputs": {"scrap": 2, "wood": 2}, "minutes": 120, "heavy": true},
+      {"at": "smithy", "workplace": "forge", "inputs": {"iron": 2, "wood": 2}, "minutes": 120, "heavy": true}
+    ],
+    "pickaxe": [
+      {"at": "smithy", "workplace": "forge", "inputs": {"scrap": 2, "wood": 2}, "minutes": 120, "heavy": true},
+      {"at": "smithy", "workplace": "forge", "inputs": {"iron": 2, "wood": 2}, "minutes": 120, "heavy": true}
+    ]
+  }
 }
